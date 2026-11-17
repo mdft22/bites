@@ -53,12 +53,12 @@ A message that arrives whole is copied once into a slab of its own and decoded f
 | [0037](../adr/0037-a-slow-reader-is-closed-not-buffered-forever.md) | a bounded send queue, an app-wide budget, no writer goroutine per socket |
 | [0038](../adr/0038-a-broadcast-is-framed-once-and-shared.md) | a broadcast is framed once and shared |
 | [0039](../adr/0039-heartbeats-run-on-one-timer-wheel.md) | heartbeats on one timer wheel, and the idle gate |
-| [0040](../adr/0040-no-permessage-deflate-for-now.md) | no compression until milestone 4, and never with context takeover |
+| [0040](../adr/0040-no-permessage-deflate-for-now.md) | permessage-deflate is offered with `WithWebSocketCompression`, in the no-context-takeover mode only, and what a client sends inflates to at most `MaxMessage` |
 | [0046](../adr/0046-websocket-origins-and-inbound-limits.md) | Origin check and the limits on what a client sends |
 | [0047](../adr/0047-a-socket-is-a-handle-and-a-topic-is-a-broadcast.md) | `Socket`, `Inbox` and `Topic` as built |
 | [0081](../adr/0081-a-topic-reaches-other-instances-through-a-broker-and-postgres-is-a-module.md) | a Topic across instances through a `Broker`, and Postgres as a module |
 | [0083](../adr/0083-a-json-value-of-several-kinds-is-a-tagged-union-of-opt-variants.md) | a frame of several kinds is a tagged union of `Opt` variants with a `Discriminator` method, and a variant only servers carry is named by `ServerOnly` |
-| [0084](../adr/0084-a-name-made-from-data-is-a-key-of-a-topics-family.md) | a name made from data is a key of a `Topics` family, and `SubscribeUnless` leaves one Socket out of a message |
+| [0084](../adr/0084-a-name-made-from-data-is-a-key-of-a-topics-family.md) | a name made from data is a key of a `Topics` family, `SubscribeUnless` leaves one Socket out of a message, and `Topics.Listen` lets the server hear one key |
 
 ## Open questions
 

@@ -224,6 +224,10 @@ _Avoid_: close reason (that is the text sent with the status), close code
 The list `WithAllowOrigins` gives, the origins of the app's own pages: the default of its WebSocket routes and of a `CSRF` with no `Origins`, which a route's or a group's own socket list may only narrow ([ADR 0057](docs/adr/0057-csrf-trusts-the-browsers-origin-and-falls-back-to-a-double-submit-token.md)). CORS's origins are not taken from it.
 _Avoid_: allow list, whitelist, trusted origins
 
+**Decoder**:
+One content coding the framework can decode a request body from, the counterpart of an Encoder: `GzipDecoder` from the core, `zstd.Decoder` and `brotli.Decoder` from the modules. A route opts in with `Decompress` and the app with `WithDecompression`; the decoded size, never the compressed one, is counted against `MaxBody` ([ADR 0044](docs/adr/0044-the-body-type-decides-how-a-body-is-read.md)).
+_Avoid_: request decompression middleware, inflater
+
 **Metrics**:
 The Observer `NewMetrics` returns, which counts requests by method, route pattern and status code and is served in the Prometheus text format by `ServeMetrics` ([ADR 0060](docs/adr/0060-metrics-are-an-observer-in-the-prometheus-text-format-labelled-by-what-the-app-bounds.md)).
 _Avoid_: stats, telemetry (for this), monitoring

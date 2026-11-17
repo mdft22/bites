@@ -20,6 +20,14 @@ func Encoder() bites.Encoder
 
 Encoder is the zstd [`Encoder`](./app.md#encoder) for [`Compression`](./app.md#compression): `SpeedFastest`, a 1 MiB window, a content checksum, and one frame per answer. Its coding is `zstd`. Its states are pooled and never reach user code ([ADR 0008](../adr/0008-no-pooled-object-reaches-the-user.md)); about GOMAXPROCS of them are live at once, each about 1.56 MB after a 64 KiB answer, and the garbage collector drops the ones left idle. Every call returns the same Encoder, so every app in the process shares one pool.
 
+### `zstd.Decoder`
+
+```go
+func Decoder() bites.Decoder
+```
+
+Decoder is the zstd [`Decoder`](./app.md#decoder) for [`Decompress`](./input.md#decompress) and [`WithDecompression`](./app.md#withdecompression): it decodes a request body sent with `Content-Encoding: zstd`, stopping at the route's `MaxBody` of decoded bytes (a body that would be more is a 413). Its readers are pooled and never reach user code, and a frame that names a window over 8 MiB, which RFC 9659 forbids for a content coding, is refused with a 400. Every call returns the same Decoder.
+
 ### `zstd.Window`
 
 ```go

@@ -8,6 +8,8 @@
 package brotli
 
 import (
+	"bytes"
+	"io"
 	"sync"
 
 	abrotli "github.com/andybalholm/brotli"
@@ -61,4 +63,28 @@ func (e *encoder) Encode(dst, src []byte) []byte {
 	st.out.b = nil // the pooled writer keeps no reference to the caller's buffer
 	e.pool.Put(st)
 	return dst
+}
+
+// decoder is the module's Decoder.
+type decoder struct{}
+
+// Decoder is the brotli Decoder for bites.Decompress and bites.WithDecompression: it decodes a
+// request body sent with Content-Encoding: br, stopping at the route's MaxBody of decoded bytes.
+func Decoder() bites.Decoder { return decoder{} }
+
+// Coding is "br".
+func (decoder) Coding() string { return "br" }
+
+// Decode appends the decoded form of the brotli stream src to dst, and returns
+// bites.ErrDecodedTooLarge when it would hold more than max bytes.
+func (decoder) Decode(dst, src []byte, max int64) ([]byte, error) {
+	buf := bytes.NewBuffer(dst)
+	// One byte more than max tells a body that is exactly max from one that is over it.
+	if _, err := buf.ReadFrom(io.LimitReader(abrotli.NewReader(bytes.NewReader(src)), max+1)); err != nil {
+		return dst, err
+	}
+	if int64(buf.Len()-len(dst)) > max {
+		return dst, bites.ErrDecodedTooLarge
+	}
+	return buf.Bytes(), nil
 }

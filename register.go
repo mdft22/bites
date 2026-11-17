@@ -28,6 +28,8 @@ type routeConfig struct {
 	maxBodySet     bool  // MaxBody was given by an option: an Upload route requires it (ADR 0044)
 	bodyTimeoutSet bool
 	maxParts       int            // MaxParts; zero is the default
+	decoders       []Decoder      // Decompress or WithDecompression: the codings a request body may arrive in
+	decodersSet    bool           // Decompress was given by an option, not seeded from the app
 	maxInFlight    int            // MaxInFlight; zero is unlimited
 	inflight       *atomic.Int64  // the route's counter, made at Registration when maxInFlight is set
 	mw             []Middleware   // Use, in the order the options apply: outermost first
@@ -611,7 +613,7 @@ func register[In, Out any](a *App, prefix, method, pattern string, h func(contex
 		panic(&RegistrationError{msg: "route " + label + " registered at " + where + " after the app started serving: routes can be added only before it does"})
 	}
 	rt := a.addRoute(method, full, label, where)
-	cfg := routeConfig{maxBody: a.limits.MaxBody, bodyTimeout: a.limits.BodyTimeout}
+	cfg := routeConfig{maxBody: a.limits.MaxBody, bodyTimeout: a.limits.BodyTimeout, decoders: a.decoders}
 	if err := applyOptions(&cfg, opts); err != nil {
 		fail(err)
 	}

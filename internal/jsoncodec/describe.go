@@ -122,7 +122,9 @@ func Describe(t reflect.Type, o Options, dir Direction) (Shape, error) {
 	if o.Binary != nil && o.Binary(t) {
 		return Shape{Kind: KindDeclared, Declared: wire.JSONSchema{Type: "string", Format: "binary"}}, nil
 	}
-	if js, ok := o.JSONSchemas[t]; ok {
+	if js, ok, err := o.declared(t); err != nil {
+		return Shape{}, refusal(path, "%v", err)
+	} else if ok {
 		return Shape{Kind: KindDeclared, Declared: js}, nil
 	}
 	if f, ok := o.Formats[t]; ok {

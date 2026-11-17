@@ -161,7 +161,7 @@ logged := bites.New(bites.WithObserver(bites.AccessLog(bites.AccessLogOptions{
 logged.Get("/ping", ping)
 ```
 
-[`AccessLogOptions`](../reference/observability.md#accesslogoptions) has two fields: `Logger`, which is the app's own logger ([`WithLogger`](../reference/app.md#withlogger)) when nil, and `Level`, `slog.LevelInfo` by default. A logger that is not enabled at the level costs one `Enabled` call and nothing else. The record has these attributes:
+[`AccessLogOptions`](../reference/observability.md#accesslogoptions) has three fields: `Logger`, which is the app's own logger ([`WithLogger`](../reference/app.md#withlogger)) when nil, `Level`, `slog.LevelInfo` by default, and `Path`, a function that replaces the path of each record, for a route whose path holds a secret (`Path: func(p string) string { if strings.HasPrefix(p, "/feed/") { return "/feed/[secret]" }; return p }`; a panic in it logs `[path function panicked]`, never the raw path). A logger that is not enabled at the level costs one `Enabled` call and nothing else. The record has these attributes:
 
 - `method`, `path` (without the query, because a query is where secrets and personal data go), `status` (what was sent), `size` (the body bytes written, after gzip) and `duration` (from the parsed head to the last byte, on the app's [clock](../reference/app.md#appclock)).
 - `request_id`, when a middleware set one, and `trace_id` and `span_id` when the request has a [trace](./observability.md#following-a-request-across-services).

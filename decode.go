@@ -515,6 +515,10 @@ func (b *bodyPlan) read(a *App, ex *engine.Exchange, in unsafe.Pointer, errs *js
 		}
 		return false
 	}
+	body, ok := decoded(ex, body, cfg)
+	if !ok {
+		return false
+	}
 	dst := unsafe.Add(in, b.off)
 	if b.kind == bodyBytes {
 		// Capped at its length: the slice shares the slab, and a handler that appends must not

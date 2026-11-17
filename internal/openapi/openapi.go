@@ -166,9 +166,12 @@ func (r *Registry) BodySchema(t reflect.Type, m Mode, input reflect.Type) (Schem
 	return s, media, err
 }
 
+// key is one component: a type in a mode, or, with v set, the variant of the tagged union t whose
+// tag is v, which the document names as a component of its own (ADR 0083).
 type key struct {
 	t reflect.Type
 	m Mode
+	v string
 }
 
 type entry struct {
@@ -244,7 +247,7 @@ func (g *gen) schema(t reflect.Type) (Schema, error) {
 	if err != nil {
 		return nil, err
 	}
-	k := key{t, g.m}
+	k := key{t: t, m: g.m}
 	_, isAnon := g.r.anon[t]
 	named := t.Name() != "" || isAnon
 	switch sh.Kind {
@@ -413,20 +416,7 @@ func (g *gen) buildKind(t reflect.Type, sh jsoncodec.Shape) (Schema, error) {
 	case jsoncodec.KindAny:
 		return Schema{}, nil
 	case jsoncodec.KindDeclared:
-		d := sh.Declared
-		if d.Type == "any" {
-			return Schema{}, nil
-		}
-		s := Schema{"type": d.Type}
-		if d.Format != "" {
-			s["format"] = d.Format
-		}
-		// Only a response can carry the null: the decoder refuses a null for a field that is not
-		// a Null, before the type's own method is asked, so a request that sent it would be a 400.
-		if d.Nullable && g.m == Response {
-			return nullable(s), nil
-		}
-		return s, nil
+		return declaredSchema(sh.Declared, g.m == Response), nil
 	case jsoncodec.KindSlice, jsoncodec.KindArray:
 		items, err := g.schema(sh.Elem)
 		if err != nil {
@@ -456,17 +446,21 @@ func (g *gen) buildKind(t reflect.Type, sh jsoncodec.Shape) (Schema, error) {
 	case jsoncodec.KindStruct:
 		return g.object(t, sh)
 	case jsoncodec.KindUnion:
-		return g.union(sh)
+		return g.union(t, sh)
 	}
 	return nil, fmt.Errorf("openapi: %s: kind %d has no schema", t, sh.Kind)
 }
 
-// union is oneOf the variants, each its object with the discriminator as a required member of
-// one constant value, and the discriminator named (ADR 0083). A variant is written inline rather
-// than as a reference to its type, because a request's object refuses members it does not list,
-// and the discriminator is a member of the variant only inside the union.
-func (g *gen) union(sh jsoncodec.Shape) (Schema, error) {
+// union is oneOf the variants, each a component of its own named after the union and the tag
+// (ServerFrame.Ready), with a discriminator that maps each tag to its component (ADR 0083). A
+// variant component is its object with the discriminator as a required member of one constant
+// value, and is not the schema of the variant's struct: a request's object refuses members it
+// does not list, and the discriminator is a member of the variant only inside the union, so a
+// reference to the struct's own component with the member beside it would describe a body the
+// schema refuses. A generator turns each variant component into a type with a name.
+func (g *gen) union(t reflect.Type, sh jsoncodec.Shape) (Schema, error) {
 	variants := make([]any, 0, len(sh.Fields))
+	mapping := Schema{}
 	for _, f := range sh.Fields {
 		vsh, err := jsoncodec.Describe(f.Type, g.o, g.m.dir())
 		if err != nil {
@@ -488,9 +482,15 @@ func (g *gen) union(sh jsoncodec.Shape) (Schema, error) {
 		req, _ := v["required"].([]any)
 		v["required"] = append([]any{sh.Tag}, req...)
 		v["title"] = f.Name
-		variants = append(variants, v)
+		vk := key{t: t, m: g.m, v: f.Name}
+		if _, ok := g.r.named[vk]; !ok {
+			e := &entry{k: vk, schema: v, done: true}
+			g.r.entries[vk], g.r.named[vk] = e, e
+		}
+		variants = append(variants, g.ref(vk))
+		mapping[f.Name] = refTo{vk}
 	}
-	return Schema{"oneOf": variants, "discriminator": Schema{"propertyName": sh.Tag}}, nil
+	return Schema{"oneOf": variants, "discriminator": Schema{"propertyName": sh.Tag, "mapping": mapping}}, nil
 }
 
 func (g *gen) object(t reflect.Type, sh jsoncodec.Shape) (Schema, error) {
@@ -657,4 +657,39 @@ func nullable(s Schema) Schema {
 		out["enum"] = append(append([]any{}, enum...), nil)
 	}
 	return out
+}
+
+// declaredSchema is the schema of what the app declared for a type that writes or reads itself
+// (ADR 0076). Only a response can carry a null: the decoder refuses a null for a field that is not
+// a Null, before the type's own method is asked, so a request that sent it would be a 400.
+func declaredSchema(d wire.JSONSchema, response bool) Schema {
+	if d.Type == "any" {
+		return Schema{}
+	}
+	s := Schema{"type": d.Type}
+	if d.Format != "" {
+		s["format"] = d.Format
+	}
+	if len(d.Properties) > 0 {
+		props := make(Schema, len(d.Properties))
+		var required []any
+		for _, p := range d.Properties {
+			props[p.Name] = declaredSchema(p.Schema, response)
+			if p.Required {
+				required = append(required, p.Name)
+			}
+		}
+		s["properties"] = props
+		s["additionalProperties"] = d.Open
+		if required != nil {
+			s["required"] = required
+		}
+	}
+	if d.Items != nil {
+		s["items"] = declaredSchema(*d.Items, response)
+	}
+	if d.Nullable && response {
+		return nullable(s)
+	}
+	return s
 }

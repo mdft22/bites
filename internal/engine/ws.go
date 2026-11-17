@@ -162,6 +162,7 @@ type WSConfig struct {
 	ReassemblyBudget  int64         // 64 MiB
 	SendQueue         int64         // 1 MiB per socket
 	SendBudget        int64         // 64 MiB for the app
+	Deflate           WSDeflate     // permessage-deflate, off by default (ADR 0040)
 }
 
 func (c *WSConfig) defaults() {
@@ -228,13 +229,17 @@ type wsLeave struct {
 // handler, so the Socket it gives that handler has something to send on; nothing leaves before
 // the 101 does. A WS is never reused for another connection (ADR 0047).
 type WS struct {
-	c    *conn
-	h    WSHandler
-	lim  *ws.Limits
-	bin  bool
-	rd   ws.Reader // the read loop's alone
-	node wheel.Node
-	ctx  WSContext
+	c   *conn
+	h   WSHandler
+	lim *ws.Limits
+	bin bool
+	// deflate says permessage-deflate was negotiated for this socket; cmsg that the message being
+	// received is compressed (the read loop's alone). They sit beside bin so they take no room of
+	// their own: an idle socket costs what it did before (ADR 0003).
+	deflate, cmsg bool
+	rd            ws.Reader // the read loop's alone
+	node          wheel.Node
+	ctx           WSContext
 
 	flushFn func() // w.flush, made once so starting a flusher allocates nothing
 
@@ -314,6 +319,11 @@ func (ex *Exchange) Upgrade(w *WS, key []byte, h WSHandler) {
 	r.Header("Connection", "Upgrade")
 	var acc [32]byte
 	r.Header("Sec-WebSocket-Accept", string(ws.AppendAccept(acc[:0], key)))
+	if ex.c.srv.o.WS.Deflate.On && negotiateDeflate(ex.Head()) {
+		w.deflate = true
+		w.rd.AllowDeflate()
+		r.Header("Sec-WebSocket-Extensions", wsDeflateResponse)
+	}
 	r.upgrade = w
 }
 
@@ -563,6 +573,9 @@ func (w *WS) event(ev ws.Event) bool {
 // charged to the app's reassembly budget (ADR 0046).
 func (w *WS) data(ev ws.Event) {
 	s := w.c.srv
+	if ev.Start {
+		w.cmsg = ev.Compressed
+	}
 	if ev.Start && ev.Opcode == ws.OpBinary && !w.bin {
 		w.beginClose(ws.CloseUnsupported, "binary frames are not accepted on this route", WSCloseInfo{Status: ws.CloseUnsupported, Cause: WSCauseClientFault, Reason: "binary frame"}, false, false)
 		return
@@ -571,7 +584,7 @@ func (w *WS) data(ev ws.Event) {
 		// The handler's own copy (ADR 0008), made by append so the bytes are copied in without
 		// being zeroed first: make then copy writes the message twice.
 		msg := append([]byte(nil), ev.Payload...)
-		w.deliver(ev.Opcode, msg)
+		w.deliverMessage(ev.Opcode, msg)
 		return
 	}
 	if ev.Start {
@@ -589,8 +602,34 @@ func (w *WS) data(ev ws.Event) {
 		s.asmUsed.Add(-w.asmCharge)
 		w.asmCharge = 0
 		w.msgDue = 0
-		w.deliver(ev.Opcode, msg)
+		w.deliverMessage(ev.Opcode, msg)
 	}
+}
+
+// deliverMessage gives a whole message to the handler: as it came, or, when its first frame had
+// RSV1, inflated first. What it holds once inflated is held to the same limit and the same UTF-8
+// rule as a message that came plain, so a small compressed message cannot hold more than a plain
+// one (ADR 0046): it is closed with 1009 when it inflates to more than the route's MaxMessage,
+// and with 1007 when it is not valid deflate or a text message is not valid UTF-8.
+func (w *WS) deliverMessage(op ws.Opcode, msg []byte) {
+	if !w.cmsg {
+		w.deliver(op, msg)
+		return
+	}
+	w.cmsg = false
+	plain, err := inflate(msg, w.lim.MaxMessage)
+	switch {
+	case errors.Is(err, errInflateTooBig):
+		w.beginClose(ws.CloseTooBig, "message too big", WSCloseInfo{Status: ws.CloseTooBig, Cause: WSCauseClientFault, Reason: "message too big once inflated"}, false, false)
+		return
+	case err != nil:
+		w.beginClose(ws.CloseInvalidData, "invalid compressed message", WSCloseInfo{Status: ws.CloseInvalidData, Cause: WSCauseClientFault, Reason: "invalid compressed message"}, false, false)
+		return
+	case op == ws.OpText && !utf8.Valid(plain):
+		w.beginClose(ws.CloseInvalidData, ws.ErrTextUTF8.Reason, WSCloseInfo{Status: ws.CloseInvalidData, Cause: WSCauseClientFault, Reason: ws.ErrTextUTF8.Reason}, false, false)
+		return
+	}
+	w.deliver(op, plain)
 }
 
 // firstClass is the size of the first assembly buffer, which no budget is charged for.
@@ -868,6 +907,17 @@ func (w *WS) Send(frame []byte) error {
 // whole or in part, and so belongs to the queue until it is written; false when it was written
 // inline before SendFrame returned, or refused, so the caller may reuse it at once.
 func (w *WS) SendFrame(frame []byte) (kept bool, err error) {
+	if w.deflate {
+		if cf, ok := deflateFrame(frame, w.c.srv.o.WS.Deflate.MinSize); ok {
+			// The compressed frame is the engine's own, so the caller's frame is never kept.
+			_, err = w.sendFrame(cf)
+			return false, err
+		}
+	}
+	return w.sendFrame(frame)
+}
+
+func (w *WS) sendFrame(frame []byte) (kept bool, err error) {
 	s := w.c.srv
 	w.mu.Lock()
 	if w.closeSent || w.done {
@@ -1113,9 +1163,10 @@ const broadcastInline = 64
 // what keeps 20,000 sockets from needing 20,000 goroutines (ADR 0037). The error is the first
 // that a socket other than a closed one returned.
 func Broadcast(targets []*WS, frame []byte) {
+	bc := deflateBroadcast(targets, frame) // set once, so the workers below capture it by value
 	if len(targets) <= broadcastInline {
 		for _, t := range targets {
-			t.Send(frame)
+			sendBroadcast(t, frame, bc)
 		}
 		return
 	}
@@ -1128,9 +1179,43 @@ func Broadcast(targets []*WS, frame []byte) {
 		go func() {
 			defer wg.Done()
 			for _, t := range part {
-				t.Send(frame)
+				sendBroadcast(t, frame, bc)
 			}
 		}()
 	}
 	wg.Wait()
+}
+
+// broadcastFrame is one message for many sockets: the plain frame, and its compressed form made
+// once, by the first socket that negotiated permessage-deflate, for all of them (every socket's
+// messages are compressed alone, so one result serves each).
+type broadcastFrame struct {
+	plain []byte
+	once  sync.Once
+	cf    []byte
+	ok    bool
+}
+
+// sendBroadcast gives t the message: its compressed form when t negotiated permessage-deflate and
+// the message compresses, the plain frame otherwise. bc is nil when no target negotiated it.
+func sendBroadcast(t *WS, frame []byte, bc *broadcastFrame) {
+	if bc != nil && t.deflate {
+		bc.once.Do(func() { bc.cf, bc.ok = deflateFrame(bc.plain, t.c.srv.o.WS.Deflate.MinSize) })
+		if bc.ok {
+			t.sendFrame(bc.cf)
+			return
+		}
+	}
+	t.sendFrame(frame)
+}
+
+// deflateBroadcast is the shared compressed form of a message, made only when a target negotiated
+// permessage-deflate: a Publish to plain sockets allocates nothing for it. It is nil otherwise.
+func deflateBroadcast(targets []*WS, frame []byte) *broadcastFrame {
+	for _, t := range targets {
+		if t.deflate {
+			return &broadcastFrame{plain: frame}
+		}
+	}
+	return nil
 }

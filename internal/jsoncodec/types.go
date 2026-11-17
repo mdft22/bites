@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -116,7 +117,7 @@ func (o Options) opaque(t reflect.Type, dir Direction) bool {
 	if t == rawMessageType || t == jsontextValue || o.Undescribed || isRawJSON(t) {
 		return false
 	}
-	if _, ok := o.JSONSchemas[t]; ok {
+	if _, ok, _ := o.declared(t); ok {
 		return false
 	}
 	if dir == Decoding {
@@ -130,7 +131,7 @@ func (o Options) opaqueRefusal(path string, t reflect.Type, dir Direction) error
 	if dir == Decoding {
 		verb, methods = "decodes", "UnmarshalJSON"
 	}
-	return refusal(path, "%s %s itself through its own %s, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[%s](JSONSchema{Type: ..., Format: ...}), or with JSONSchema{Type: \"any\"} if it really is free-form JSON", t, verb, methods, t)
+	return refusal(path, "%s %s itself through its own %s, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[%[4]s](JSONSchema{Type: ..., Format: ...}), or, for a type of your own, give it a method func (%[4]s) JSONSchema() JSONSchema, or state JSONSchema{Type: \"any\"} if it really is free-form JSON", t, verb, methods, t)
 }
 
 // OwnJSON reports whether t, or *t, has a json or json/v2 method in either direction, which is
@@ -163,4 +164,24 @@ func checkRawJSON(t reflect.Type, path string) error {
 		return refusal(path, "%s: T is itself free-form JSON; use json.RawMessage, or name the shape the value has", wire.PublicName(t))
 	}
 	return nil
+}
+
+// declared is the schema the app gave t: the one it registered with WithJSONSchema, or the one t
+// states through its own JSONSchema method. A type with the method that no JSON method of its own
+// writes or reads is an error, as is a type with both the method and a registration, since the
+// codec reads and writes its fields and a schema for something else would hide them (ADR 0076).
+func (o Options) declared(t reflect.Type) (wire.JSONSchema, bool, error) {
+	reg, registered := o.JSONSchemas[t]
+	m, has, err := wire.DeclaredOf(t)
+	switch {
+	case err != nil:
+		return wire.JSONSchema{}, true, err
+	case has && registered:
+		return wire.JSONSchema{}, true, fmt.Errorf("%s states its schema through a JSONSchema method and is also registered with WithJSONSchema, and a type is described one way: drop one", t)
+	case has && !hasOwnJSON(t):
+		return wire.JSONSchema{}, true, fmt.Errorf("%s has a JSONSchema method but no JSON method of its own, so its JSON is written from its fields and the method would hide them: drop the method, or give the type MarshalJSON", t)
+	case has:
+		return m, true, nil
+	}
+	return reg, registered, nil
 }

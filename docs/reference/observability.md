@@ -120,10 +120,13 @@ type AccessLogOptions struct {
 	// Level is the level of every record; slog.LevelInfo, the zero value, by default. When the
 	// logger is not enabled at this level the Observer does nothing at End, and allocates nothing.
 	Level slog.Level
+
+	// Path replaces the path of each record with what it returns.
+	Path func(path string) string
 }
 ```
 
-AccessLogOptions configures `AccessLog`.
+AccessLogOptions configures `AccessLog`. `Path` is for a route whose path holds a secret, such as a capability URL (a calendar feed, a download link, a password-reset link): it is given the raw path, without the query, and returns what is logged in its place, usually that path with the secret segment swapped for a placeholder. Nil logs the raw path. It is called once for each logged request, on the goroutine that ends it, so it must be quick and must not block; it is not called when the logger is not enabled at `Level`. A panic in it is recovered and logged at Error with the app's logger, and the record carries the path `[path function panicked]`, never the raw one, since a function that fails must not let a secret through. It changes only the record: the API document, a Trace's span and the Observer of another module still see the path.
 
 ## Metrics
 

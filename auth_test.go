@@ -482,3 +482,81 @@ func TestTheCredentialIsCheckedBeforeAnyOtherProviderWhateverTheFieldOrder(t *te
 		t.Fatalf("a credential and no tenant: %d %s", r.Status, r.Text())
 	}
 }
+
+// ownToken is what a Recognise of these tests calls the app's own: the prefix its tokens carry.
+func ownToken(token string) bool { return strings.HasPrefix(token, "bts_") }
+
+func verifyOwn(_ context.Context, token string) (Principal, error) {
+	if token == "bts_ada" {
+		return Principal{Name: "ada"}, nil
+	}
+	return Principal{}, fmt.Errorf("token: unknown: %w", bites.ErrInvalidCredentials)
+}
+
+func TestAnOptOfABearerThatRecognisesLeavesAForeignTokenAnonymousAndStillAnswersItsOwnBadOneWith401(t *testing.T) {
+	calls := 0
+	srv := start(t, func(app *bites.App) {
+		app.Provide(bites.BearerAuth(func(ctx context.Context, tok string) (Principal, error) {
+			calls++
+			return verifyOwn(ctx, tok)
+		}, bites.AuthOptions{Recognise: ownToken}))
+		app.Get("/feed", maybeWho)
+	})
+	feed := func(h ...string) bitetest.Response {
+		r := authReq(h...)
+		r.Target = "/feed"
+		return srv.Do(r)
+	}
+	if r := feed("Authorization", "Bearer "+goodToken); r.Status != 200 || r.Text() != `{"name":"anonymous"}` || calls != 0 {
+		t.Fatalf("a proxy's token: %d %s, the verifier ran %d times; want anonymous and no verify", r.Status, r.Text(), calls)
+	}
+	if r := feed("Authorization", "Bearer bts_ada"); r.Status != 200 || r.Text() != `{"name":"ada"}` {
+		t.Fatalf("the app's own token: %d %s", r.Status, r.Text())
+	}
+	if r := feed("Authorization", "Bearer bts_expired"); r.Status != 401 || r.Get("www-authenticate") != `Bearer realm="api", error="invalid_token"` {
+		t.Fatalf("the app's own token that is not good is still a 401: %d %v", r.Status, r.Header)
+	}
+}
+
+func TestABearerThatRecognisesAnswersAForeignTokenAsMissingWithoutVerifyingIt(t *testing.T) {
+	calls := 0
+	srv := start(t, authApp(func(app *bites.App) {
+		app.Provide(bites.BearerAuth(func(ctx context.Context, tok string) (Principal, error) {
+			calls++
+			return verifyOwn(ctx, tok)
+		}, bites.AuthOptions{Recognise: ownToken}))
+	}))
+	r := srv.Do(authReq("Authorization", "Bearer "+goodToken))
+	if r.Status != 401 || r.Get("www-authenticate") != `Bearer realm="api"` || calls != 0 {
+		t.Fatalf("a foreign token on a required Bearer: %d %v, verify ran %d times; want the plain challenge", r.Status, r.Header, calls)
+	}
+	if !strings.Contains(r.Text(), "not one it recognises") {
+		t.Fatalf("the 401 does not say why: %s", r.Text())
+	}
+	if r := srv.Do(authReq("Authorization", "Bearer bts_ada")); r.Status != 200 {
+		t.Fatalf("the app's own token: %d", r.Status)
+	}
+}
+
+func TestAnyAuthSkipsABearerThatDoesNotRecogniseTheTokenAndUsesTheNextCredential(t *testing.T) {
+	srv := start(t, authApp(func(app *bites.App) {
+		app.Provide(bites.AnyAuth(bites.BearerAuth(verifyOwn, bites.AuthOptions{Recognise: ownToken}), bites.APIKeyAuth(verifyKey)))
+	}))
+	r := srv.Do(authReq("Authorization", "Bearer "+goodToken, "X-API-Key", "k_live_123"))
+	if r.Status != 200 {
+		t.Fatalf("a proxy's token beside a good key: %d %s", r.Status, r.Text())
+	}
+	if r := srv.Do(authReq("Authorization", "Bearer bts_ada")); r.Status != 200 || r.Text() != `{"name":"ada"}` {
+		t.Fatalf("the app's own token: %d %s", r.Status, r.Text())
+	}
+}
+
+func TestARecogniseOfABearerIsNotInTheAPIDocumentAndABearerSentTwiceIsStillA400(t *testing.T) {
+	srv := start(t, authApp(func(app *bites.App) {
+		app.Provide(bites.BearerAuth(verifyOwn, bites.AuthOptions{Recognise: func(string) bool { return false }}))
+	}))
+	r := srv.Do(authReq("Authorization", "Bearer a", "Authorization", "Bearer b"))
+	if r.Status != 400 {
+		t.Fatalf("two Authorization headers: %d", r.Status)
+	}
+}

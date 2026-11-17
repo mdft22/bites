@@ -429,6 +429,42 @@ func (ts *Topics[Out]) Keys() int
 
 Keys is the number of keys that have a Socket on this instance, each a Topic held in memory.
 
+### `WithWebSocketCompression`
+
+```go
+func WithWebSocketCompression(c WebSocketCompression) Option
+```
+
+WithWebSocketCompression offers permessage-deflate (RFC 7692) to every client that asks for it, which browsers do, so that the JSON frames of a chatty protocol (presence, collaborative operations, streamed text) go compressed. It is off without this option. It negotiates the one mode that keeps no memory for a socket, `server_no_context_takeover` and `client_no_context_takeover`: every message is compressed and inflated on its own, with a pooled state held only while it runs, so an idle socket costs what it cost before. A message of a Topic is compressed once for all its sockets. A message under `MinSize`, one that compressing does not make smaller, and every control frame are sent as they are, which the RFC allows. A client that does not offer the extension, or offers it only with a `server_max_window_bits` other than 15, gets plain frames.
+
+What a client sends is held to the same limits as a plain message: the route's [`MaxMessage`](#maxmessage) is counted on the inflated message, so one that inflates past it closes the socket with 1009; data that is not valid deflate and a text message that is not valid UTF-8 close it with 1007; RSV1 on a continuation or a control frame, and RSV2 or RSV3, close it with 1002. It panics at `New`, naming the line, for a negative `MinSize` and when given twice. Measured cost and what it does not cover: [ADR 0040](../adr/0040-no-permessage-deflate-for-now.md).
+
+### `WebSocketCompression`
+
+```go
+type WebSocketCompression struct {
+	MinSize int
+}
+```
+
+WebSocketCompression is what `WithWebSocketCompression` takes. `MinSize` is the smallest message payload, in bytes, that is compressed: a smaller message is sent as it is, because compressing a few dozen bytes costs more CPU than it saves. Zero is [`DefaultWebSocketCompressionMinSize`](#defaultwebsocketcompressionminsize); a negative value is refused.
+
+### `DefaultWebSocketCompressionMinSize`
+
+```go
+const DefaultWebSocketCompressionMinSize = 256
+```
+
+DefaultWebSocketCompressionMinSize is the `MinSize` of a `WebSocketCompression` that leaves it zero.
+
+### `Topics.Listen`
+
+```go
+func (ts *Topics[Out]) Listen(key string, fn func(Out)) (stop func(), err error)
+```
+
+Listen calls `fn` with every message the Topic of `key` delivers, until the `stop` it returns is called, as [`Topic.Listen`](#topiclisten) does for one Topic: on a Topics made with `NewTopics`, every message the broker delivers from any instance, this one's included, after [`Resolve`](#topicsresolve) has expanded it; on a zero Topics, every message published in this process. It is how the server's own code hears one key of a family without a Socket: a cache that drops its entry per key, or a test of what a family delivers after `Resolve`, which needs no WebSocket route and no dial. The Topic of `key` is made while `fn` listens, so a key held only by functions is held in memory like one with a Socket, and it is dropped when its last Socket and function have left. `fn` runs on the goroutine that delivers and must not block, and a panic in it is recovered and logged, as for `Topic.Listen`. `stop` may be called more than once and from any goroutine. It returns an error, and listens to nothing, for an empty key and for one the broker does not carry, as `Subscribe` does, and panics when `fn` is nil.
+
 ### `Topics.Resolve`
 
 ```go

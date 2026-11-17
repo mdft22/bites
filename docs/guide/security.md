@@ -194,7 +194,7 @@ func article(ctx context.Context, in Article) (bites.Text, error) {
 }
 ```
 
-A credential that is sent and not good is still a 401, never an anonymous request: a client with an expired token learns to refresh it. This works for a Provider made by `BearerAuth`, `BasicAuth`, `APIKeyAuth`, `AnyAuth` or `CustomAuth`, since the framework must know where the credential would be. A route that asks for both `User` and `Opt[User]` is refused at Registration: the credential is required there.
+A credential that is sent and not good is still a 401, never an anonymous request: a client with an expired token learns to refresh it. Where a proxy in front of the app (oauth2-proxy, IAP, Cloudflare Access) adds its own `Authorization: Bearer` that was never the app's, say which tokens are the app's with `AuthOptions.Recognise`: a token it returns false for is as if none was sent, so the optional form is absent and the next credential is tried, and a token it returns true for that is not good is still a 401: `bites.BearerAuth(verify, bites.AuthOptions{Recognise: func(t string) bool { return strings.HasPrefix(t, "bts_") }})`. This works for a Provider made by `BearerAuth`, `BasicAuth`, `APIKeyAuth`, `AnyAuth` or `CustomAuth`, since the framework must know where the credential would be. A route that asks for both `User` and `Opt[User]` is refused at Registration: the credential is required there.
 
 ### A Provider you wrote, in the API document
 
@@ -408,7 +408,7 @@ err = tx.Commit(ctx)
 
 ### A sliding session
 
-A session lives `MaxAge` from its last `Save`, so one that is only read ends `MaxAge` after login however busy the user is. Set `RefreshAfter` and the framework saves a session again, as `Save` would, when a request opens one that was saved longer ago than that; `MaxAge/2` is the usual value:
+A session lives `MaxAge` from its last `Save`, so one that is only read ends `MaxAge` after login however busy the user is. Set `RefreshAfter` and the framework moves the expiry of a session when a request opens one that was saved longer ago than that; `MaxAge/2` is the usual value:
 
 ```go
 carts := bites.NewSessions[Cart](bites.SessionOptions{
@@ -418,7 +418,7 @@ carts := bites.NewSessions[Cart](bites.SessionOptions{
 })
 ```
 
-The new cookie is added to the answer only when its status is under 400 and the handler set no cookie of the session's name, so a `Save`, `Renew` or `Clear` of yours wins and a logout stays a logout. With a store the row keeps its id and gets the new expiry. A refresh that fails is logged at Warn and the request goes on. `NewSessions` refuses a value that is negative or not under `MaxAge`; zero (the default) never refreshes. A refresh racing a revocation can put a deleted session back, like a `Save`: keep the `User` Provider refusing a disabled user on every request.
+The new cookie is added to the answer only when its status is under 400 and the handler set no cookie of the session's name, so a `Save`, `Renew` or `Clear` of yours wins and a logout stays a logout. With a store the row keeps its id and gets the new expiry through `SessionStore.Touch`, which creates nothing: a session that was revoked while the request was in flight (`RevokeOwner`, "sign out everywhere") stays revoked and gets no new cookie. To hang a row off the browser's session (a push subscription that ends with the cookie session), key it on a hash of `Session.StoreID()`. A refresh that fails is logged at Warn and the request goes on. `NewSessions` refuses a value that is negative or not under `MaxAge`; zero (the default) never refreshes. A refresh racing a revocation can put a deleted session back, like a `Save`: keep the `User` Provider refusing a disabled user on every request.
 
 A route that needs a signed-in user asks for `User`, and the `User` Provider needs the session and answers 401 when it is new:
 

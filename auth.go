@@ -36,6 +36,24 @@ type AuthOptions struct {
 	// Header is the request header APIKeyAuth reads the key from; "X-API-Key" when empty. It is
 	// refused on BearerAuth and BasicAuth, which read Authorization as RFC 6750 and RFC 7617 say.
 	Header string
+
+	// Recognise says whether a Bearer token is one this Provider's own, so that a token it does
+	// not own is left to the next credential. It is for BearerAuth, called with the token of every
+	// request that carries an Authorization header of the Bearer scheme, on the goroutine that
+	// serves it, so it must be quick and must not block or keep the token. It decides what counts
+	// as present: a token it returns false for is as if the request had sent no Bearer token, so an
+	// Opt of the Provider is absent (not a 401), an alternative of AnyAuth is skipped, and the
+	// Provider itself answers 401 with the plain challenge, without running verify. It is for an app
+	// whose route also serves browsers by a cookie while a proxy in front (oauth2-proxy, IAP,
+	// Cloudflare Access) adds its own "Authorization: Bearer <jwt>", which is not the app's: a
+	// typical Recognise checks a prefix the app puts on the tokens it issues
+	// (strings.HasPrefix(token, "bts_")) or the shape of its own JWT. A token Recognise returns
+	// true for goes to verify, and a verify that rejects it is still a 401. The API document is
+	// unchanged: it lists the Bearer scheme as before. Nil means every Bearer token is the
+	// Provider's own. A header sent twice is present whatever Recognise says, so the Provider
+	// answers its 400. It is refused on BasicAuth and APIKeyAuth, which have no token to
+	// recognise.
+	Recognise func(token string) bool
 }
 
 const (
@@ -89,13 +107,16 @@ func newAuthConfig(fn, scheme string, verifyNil bool, opts []AuthOptions) authCo
 	} else if o.Header != "" {
 		refuseMiddleware(fn, "Header is %q, but %s reads Authorization, as its RFC says; Header is for APIKeyAuth", o.Header, fn)
 	}
+	if o.Recognise != nil && scheme != "Bearer" {
+		refuseMiddleware(fn, "Recognise is set, but %s has no Bearer token to recognise; Recognise is for BearerAuth", fn)
+	}
 	realm := `realm="` + o.Realm + `"`
 	switch scheme {
 	case "Bearer":
 		c.challenge = "Bearer " + realm
 		c.invalid = "Bearer " + realm + `, error="invalid_token"`
 		c.malformed = "Bearer " + realm + `, error="invalid_request"`
-		c.cred = credential{typ: "http", scheme: "bearer"}
+		c.cred = credential{typ: "http", scheme: "bearer", recognise: o.Recognise}
 	case "Basic":
 		c.challenge = "Basic " + realm + `, charset="UTF-8"`
 		c.invalid = c.challenge
@@ -202,6 +223,9 @@ func (p *bearerAuth[T]) provide(ctx context.Context, req Request, _ struct{}) (T
 	rest, ok := cutScheme(v, "Bearer")
 	if !ok {
 		return zero, p.c.missing("a Bearer token is required")
+	}
+	if rec := p.c.cred.recognise; rec != nil && !rec(rest) {
+		return zero, p.c.missing("a Bearer token of this API is required: the one sent is not one it recognises")
 	}
 	if !isB64Token(rest) {
 		return zero, p.c.bad("the Bearer token is malformed")
@@ -637,7 +661,8 @@ type credential struct {
 	bearerFormat string
 	oidcURL      string
 	description  string
-	challenge    string // the WWW-Authenticate value of a 401 for a missing one; "" when not known
+	challenge    string            // the WWW-Authenticate value of a 401 for a missing one; "" when not known
+	recognise    func(string) bool // BearerAuth: AuthOptions.Recognise, nil for every token
 }
 
 // present reports whether req carries this credential, well formed or not: what AnyAuth and an
@@ -651,7 +676,10 @@ func (c *credential) present(req Request) bool {
 			scheme = "bearer"
 		}
 		v, n := req.uniqueHeader("Authorization")
-		_, ok := cutScheme(v, scheme)
+		rest, ok := cutScheme(v, scheme)
+		if ok && c.recognise != nil && n <= 1 {
+			ok = c.recognise(rest)
+		}
 		return n > 1 || ok
 	case "apiKey":
 		if c.in == "cookie" {

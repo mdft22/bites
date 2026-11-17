@@ -78,6 +78,10 @@ func (b *bodyPlan) readForm(ex *engine.Exchange, in unsafe.Pointer, errs *jsonco
 		}
 		return false
 	}
+	body, ok := decoded(ex, body, cfg)
+	if !ok {
+		return false
+	}
 	// Counted before anything is decoded, so a body of a million '&' costs one scan. n separators
 	// bound n+1 fields, so the form is over the limit when the separators reach it.
 	if maxFields > 0 && bytes.Count(body, ampersand) >= maxFields {

@@ -26,6 +26,7 @@ var aliasTypes = map[string]reflect.Type{
 	"PositiveInt":     reflect.TypeFor[bites.PositiveInt](),
 	"PositiveInt64":   reflect.TypeFor[bites.PositiveInt64](),
 	"JSONSchema":      reflect.TypeFor[bites.JSONSchema](),
+	"JSONProperty":    reflect.TypeFor[bites.JSONProperty](),
 	"StreamWriter":    reflect.TypeFor[bites.StreamWriter](),
 	"CloseInfo":       reflect.TypeFor[bites.CloseInfo](),
 	"ServerOnlyError": reflect.TypeFor[bites.ServerOnlyError](),

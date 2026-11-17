@@ -197,3 +197,78 @@ func TestResolveOnAZeroTopicsAndSubscribeUnlessWithNilPanicSayingWhatToGive(t *t
 		}()
 	}
 }
+
+func TestAFunctionListeningToOneKeyOfAFamilyHearsThatKeyOnlyAndHoldsTheKeyWithNoSocket(t *testing.T) {
+	bus := bitetest.NewBroker()
+	here := bites.NewTopics[wsOut]("room.", bus, bites.TopicsOptions{})
+	there := bites.NewTopics[wsOut]("room.", bus.Peer(), bites.TopicsOptions{})
+	var heard []string
+	stop, err := here.Listen("7", func(m wsOut) { heard = append(heard, m.Text) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if here.Keys() != 1 || here.Len("7") != 0 || bus.Subscriptions("room.7") != 1 {
+		t.Fatalf("a listening function holds %d keys, %d sockets and %d subscriptions, want 1, 0 and 1", here.Keys(), here.Len("7"), bus.Subscriptions("room.7"))
+	}
+	there.Publish("7", wsOut{Text: "seven"})
+	there.Publish("8", wsOut{Text: "eight"})
+	if strings.Join(heard, ",") != "seven" {
+		t.Fatalf("the function heard %v, want only the key it listens to", heard)
+	}
+	stop()
+	stop() // a second stop does nothing
+	there.Publish("7", wsOut{Text: "after"})
+	if len(heard) != 1 || here.Keys() != 0 || bus.Subscriptions("room.7") != 0 {
+		t.Fatalf("after stop, heard %v, %d keys, %d subscriptions: the key is not dropped", heard, here.Keys(), bus.Subscriptions("room.7"))
+	}
+}
+
+func TestAFunctionListeningToAKeyHearsTheFrameResolveExpandedWithNoSocket(t *testing.T) {
+	bus := bitetest.NewBroker()
+	rooms := bites.NewTopics[wsOut]("room.", bus, bites.TopicsOptions{})
+	rooms.Resolve(func(key string, v wsOut) (wsOut, bool) { return wsOut{Text: key + ":" + v.Text}, true })
+	var heard []string
+	stop, _ := rooms.Listen("7", func(m wsOut) { heard = append(heard, m.Text) })
+	defer stop()
+	rooms.Publish("7", wsOut{Text: "ref"})
+	if strings.Join(heard, ",") != "7:ref" {
+		t.Fatalf("the function heard %v, want the resolved frame 7:ref", heard)
+	}
+}
+
+func TestAListenerAndASocketKeepAKeyTogetherAndALocalFamilyHearsItsOwnPublish(t *testing.T) {
+	var rooms bites.Topics[wsOut]
+	srv := roomsApp(t, &rooms)
+	var heard []string
+	stop, err := rooms.Listen("1", func(m wsOut) { heard = append(heard, m.Text) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := memWS(t, srv, "/room/1")
+	waitFor(t, "the socket to subscribe", func() bool { return rooms.Len("1") == 1 })
+	rooms.Publish("1", wsOut{Text: "hi"})
+	c.expectText(`{"text":"hi"}`)
+	c.closeWith(1000, "")
+	c.expectEOF()
+	waitFor(t, "the socket to leave", func() bool { return rooms.Len("1") == 0 })
+	if rooms.Keys() != 1 {
+		t.Fatalf("the key was dropped with its last socket while a function still listens: %d keys", rooms.Keys())
+	}
+	stop()
+	if strings.Join(heard, ",") != "hi" || rooms.Keys() != 0 {
+		t.Fatalf("heard %v with %d keys left, want hi and none", heard, rooms.Keys())
+	}
+}
+
+func TestListenOnAFamilyWithAnEmptyKeyIsAnErrorAndANilFunctionPanicsSayingWhatToGive(t *testing.T) {
+	var rooms bites.Topics[wsOut]
+	if _, err := rooms.Listen("", func(wsOut) {}); err == nil || !strings.Contains(err.Error(), "the key is empty") {
+		t.Fatalf("an empty key: %v", err)
+	}
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(r.(string), "fn is nil") {
+			t.Fatalf("Listen(key, nil) recovered %v", r)
+		}
+	}()
+	rooms.Listen("7", nil)
+}

@@ -161,3 +161,31 @@ func TestATypedJSONAnswerOf4KiBCompressedWithBrotliAllocatesTwice(t *testing.T) 
 		t.Errorf("allocs/request = %v, want exactly 2, as with gzip (ADR 0003, ADR 0061)", got)
 	}
 }
+
+func TestABrotliBodyIsDecodedByARouteThatOptsInAndTheDecodedSizeIsHeldToMaxBody(t *testing.T) {
+	app := bites.New(bites.WithClock(bitetest.NewClock()), bites.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	app.Post("/paste", func(_ context.Context, in struct{ Body struct{ Cells []string } }) (int, error) {
+		return len(in.Body.Cells), nil
+	}, bites.Decompress(brotli.Decoder()), bites.MaxBody(1024))
+	srv := bitetest.Start(t, app)
+	compress := func(s string) []byte {
+		var b bytes.Buffer
+		w := abrotli.NewWriter(&b)
+		w.Write([]byte(s))
+		w.Close()
+		return b.Bytes()
+	}
+	send := func(body []byte) bitetest.Response {
+		return srv.Do(bitetest.Request{Method: "POST", Target: "/paste", Body: body,
+			Header: map[string][]string{"Content-Type": {"application/json"}, "Content-Encoding": {"br"}}})
+	}
+	if r := send(compress(`{"cells":["a","b"]}`)); r.Status != 200 || r.Text() != "2" {
+		t.Fatalf("a brotli body: %d %s", r.Status, r.Text())
+	}
+	if r := send(compress(`{"cells":["` + strings.Repeat("x", 5000) + `"]}`)); r.Status != 413 {
+		t.Fatalf("a bomb: %d %s", r.Status, r.Text())
+	}
+	if r := send([]byte("not brotli at all")); r.Status != 400 {
+		t.Fatalf("not brotli: %d %s", r.Status, r.Text())
+	}
+}

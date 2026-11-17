@@ -48,6 +48,16 @@ func (f *fkStore) Save(ctx context.Context, id string, data []byte, expires time
 	return nil
 }
 
+func (f *fkStore) Touch(ctx context.Context, id string, expires time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.data[id]; !ok || !f.expires[id].After(bites.Now(ctx)) {
+		return false, nil
+	}
+	f.expires[id] = expires
+	return true, nil
+}
+
 func (f *fkStore) Delete(ctx context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

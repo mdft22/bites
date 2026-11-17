@@ -295,7 +295,8 @@ func TestRateLimitStore(t *testing.T, newStore func(t *testing.T) bites.RateLimi
 // TestSessionStore checks a bites.SessionStore against the contract of its doc comment, one
 // subtest a promise: Load of an id that was never saved, was deleted or has expired is not found,
 // Save keeps data for an id until its expiry and replaces what the id had (the expiry too),
-// Delete of an id with nothing is not an error, and ids do not share data. newStore is called once
+// Touch moves an expiry and nothing else and never creates a session, Delete of an id with nothing
+// is not an error, and ids do not share data. newStore is called once
 // for each subtest and must return a store with no state of any earlier one; it may call
 // t.Cleanup. The suite calls Save, so a store written only for owned types, whose Save returns an
 // error, is checked by TestOwnerSessionStore alone. Expiry is judged on bites.Now(ctx), the clock of
@@ -399,6 +400,58 @@ func TestSessionStore(t *testing.T, newStore func(t *testing.T) bites.SessionSto
 		}
 		if _, ok := load(t, s, "later"); !ok {
 			t.Fatal("a session with a later expiry was lost")
+		}
+	})
+	touch := func(t *testing.T, s bites.SessionStore, id string, exp time.Time) bool {
+		t.Helper()
+		ok, err := s.Touch(ctx, id, exp)
+		if err != nil {
+			t.Fatalf("Touch(%q) returned the error %v", id, err)
+		}
+		return ok
+	}
+	run("Touch moves the expiry of a live session and keeps its data", func(t *testing.T, s bites.SessionStore) {
+		save(t, s, "id-1", []byte("data"), clk.Now().Add(time.Minute))
+		if !touch(t, s, "id-1", clk.Now().Add(2*time.Hour)) {
+			t.Fatal("Touch of a live session returned found false")
+		}
+		clk.Advance(time.Hour)
+		if d, ok := load(t, s, "id-1"); !ok || string(d) != "data" {
+			t.Fatalf("a touched session was not found an hour on, or lost its data: %q, %v", d, ok)
+		}
+		clk.Advance(2 * time.Hour)
+		if _, ok := load(t, s, "id-1"); ok {
+			t.Fatal("a touched session outlived the expiry Touch gave it")
+		}
+	})
+	run("Touch of an id with nothing creates nothing and says not found", func(t *testing.T, s bites.SessionStore) {
+		if touch(t, s, "never-saved-id-0123456", hour()) {
+			t.Fatal("Touch of an unknown id returned found true")
+		}
+		if _, ok := load(t, s, "never-saved-id-0123456"); ok {
+			t.Fatal("Touch created a session: a slide that races a revoke would bring the session back")
+		}
+	})
+	run("Touch of a deleted session leaves it deleted", func(t *testing.T, s bites.SessionStore) {
+		save(t, s, "id-1", []byte("data"), hour())
+		if err := s.Delete(ctx, "id-1"); err != nil {
+			t.Fatal(err)
+		}
+		if touch(t, s, "id-1", hour()) {
+			t.Fatal("Touch of a deleted session returned found true")
+		}
+		if _, ok := load(t, s, "id-1"); ok {
+			t.Fatal("Touch recreated a deleted session")
+		}
+	})
+	run("Touch of an expired session does not revive it", func(t *testing.T, s bites.SessionStore) {
+		save(t, s, "id-1", []byte("data"), clk.Now().Add(time.Second))
+		clk.Advance(time.Minute)
+		if touch(t, s, "id-1", hour()) {
+			t.Fatal("Touch of an expired session returned found true")
+		}
+		if _, ok := load(t, s, "id-1"); ok {
+			t.Fatal("Touch revived an expired session: an expired session has ended, as a deleted one has")
 		}
 	})
 	run("Delete forgets an id and leaves the others", func(t *testing.T, s bites.SessionStore) {
@@ -629,6 +682,24 @@ func TestOwnerSessionStore(t *testing.T, newStore func(t *testing.T) bites.Owner
 		saveOwned(t, s, "alice-1", "alice")
 		if n := deleteOwner(t, s, "alice", ""); n != 1 || !found(t, s, "anon-1") {
 			t.Fatalf("DeleteOwner(alice) forgot %d sessions or touched a session of no owner", n)
+		}
+	})
+	run("Touch keeps the owner of the session and creates nothing once DeleteOwner forgot it", func(t *testing.T, s bites.OwnerSessionStore) {
+		saveOwned(t, s, "id-1", "alice")
+		if ok, err := s.Touch(ctx, "id-1", clk.Now().Add(2*time.Hour)); err != nil || !ok {
+			t.Fatalf("Touch of an owned session = %v, %v", ok, err)
+		}
+		if d, ok, _ := s.Load(ctx, "id-1"); !ok || string(d) != "data-id-1" {
+			t.Fatalf("Touch changed the data: %q, %v", d, ok)
+		}
+		if n := deleteOwner(t, s, "alice", ""); n != 1 {
+			t.Fatalf("DeleteOwner after a Touch forgot %d sessions, want 1: Touch lost the owner", n)
+		}
+		if ok, err := s.Touch(ctx, "id-1", clk.Now().Add(2*time.Hour)); err != nil || ok {
+			t.Fatalf("Touch of a session DeleteOwner forgot = %v, %v, want not found", ok, err)
+		}
+		if found(t, s, "id-1") {
+			t.Fatal("Touch brought back a session DeleteOwner forgot, the race of a slide against \"sign out everywhere\"")
 		}
 	})
 	run("DeleteOwner with keep empty forgets every session of the owner and returns how many", func(t *testing.T, s bites.OwnerSessionStore) {

@@ -66,7 +66,7 @@ func TestASocketReadsAndSendsATaggedUnionAndAnUnknownTagIsAnErrorThatNamesTheTag
 	}
 }
 
-func TestTheAPIDocumentDescribesAUnionAsOneOfItsVariantsWithTheDiscriminator(t *testing.T) {
+func TestTheAPIDocumentDescribesAUnionAsOneOfItsNamedVariantComponentsWithTheDiscriminatorMappingEachTag(t *testing.T) {
 	doc, err := unionApp().OpenAPIDocument()
 	if err != nil {
 		t.Fatal(err)
@@ -75,11 +75,15 @@ func TestTheAPIDocumentDescribesAUnionAsOneOfItsVariantsWithTheDiscriminator(t *
 		Components struct {
 			Schemas map[string]struct {
 				OneOf []struct {
-					Title      string
-					Required   []string
-					Properties map[string]struct{ Const string }
+					Ref string `json:"$ref"`
 				}
-				Discriminator struct{ PropertyName string }
+				Discriminator struct {
+					PropertyName string
+					Mapping      map[string]string
+				}
+				Title      string
+				Required   []string
+				Properties map[string]struct{ Const string }
 			}
 		}
 	}
@@ -90,11 +94,17 @@ func TestTheAPIDocumentDescribesAUnionAsOneOfItsVariantsWithTheDiscriminator(t *
 	if !ok || cf.Discriminator.PropertyName != "type" || len(cf.OneOf) != 2 {
 		t.Fatalf("ClientFrame is %+v in %s", cf, doc)
 	}
-	join := cf.OneOf[0]
+	if cf.OneOf[0].Ref != "#/components/schemas/ClientFrame.Join" || cf.OneOf[1].Ref != "#/components/schemas/ClientFrame.Say" {
+		t.Fatalf("the variants are %+v: want a reference to a component named after the union and the tag", cf.OneOf)
+	}
+	if cf.Discriminator.Mapping["join"] != "#/components/schemas/ClientFrame.Join" || cf.Discriminator.Mapping["say"] != "#/components/schemas/ClientFrame.Say" {
+		t.Fatalf("the mapping is %v", cf.Discriminator.Mapping)
+	}
+	join := d.Components.Schemas["ClientFrame.Join"]
 	if join.Title != "join" || join.Properties["type"].Const != "join" || join.Required[0] != "type" || join.Required[1] != "room" {
 		t.Fatalf("the join variant is %+v", join)
 	}
-	if sf := d.Components.Schemas["ServerFrame"]; len(sf.OneOf) != 2 || sf.OneOf[1].Properties["type"].Const != "said" {
+	if sf := d.Components.Schemas["ServerFrame"]; len(sf.OneOf) != 2 || d.Components.Schemas["ServerFrame.Said"].Properties["type"].Const != "said" {
 		t.Fatalf("ServerFrame is %+v", sf)
 	}
 }
@@ -131,7 +141,10 @@ func TestTheAPIDocumentOmitsAServerOnlyVariantFromTheUnionAndItsMapping(t *testi
 	var d struct {
 		Components struct {
 			Schemas map[string]struct {
-				OneOf []struct{ Title string }
+				OneOf []struct {
+					Ref string `json:"$ref"`
+				}
+				Discriminator struct{ Mapping map[string]string }
 			}
 		}
 	}
@@ -139,8 +152,9 @@ func TestTheAPIDocumentOmitsAServerOnlyVariantFromTheUnionAndItsMapping(t *testi
 		t.Fatal(err)
 	}
 	for _, name := range []string{"RelayFrame.Request", "RelayFrame.Response"} {
-		if rf := d.Components.Schemas[name]; len(rf.OneOf) != 1 || rf.OneOf[0].Title != "said" {
-			t.Fatalf("%s is %+v: want the one variant said in %s", name, rf, doc)
+		rf := d.Components.Schemas[name]
+		if len(rf.OneOf) != 1 || !strings.Contains(rf.OneOf[0].Ref, "RelayFrame.Said") || len(rf.Discriminator.Mapping) != 1 || rf.Discriminator.Mapping["said"] == "" {
+			t.Fatalf("%s is %+v: want the one variant said, once in oneOf and once in the mapping, in %s", name, rf, doc)
 		}
 	}
 	if strings.Contains(string(doc), `"ref"`) || strings.Contains(string(doc), "RefOnly") {

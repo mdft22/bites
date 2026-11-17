@@ -119,6 +119,14 @@ func (s *Store) SaveOwned(ctx context.Context, id, owner string, data []byte, ex
 
 SaveOwned is `Save` that also records `owner` for `id`, replacing the owner `id` had. An empty owner is stored as NULL: the session is kept, and `DeleteOwner` never finds it. An owner is text Postgres can store: one with a NUL byte or invalid UTF-8 is an error from the database, a 500; a User's id is neither.
 
+### `pgsession.Store.Touch`
+
+```go
+func (s *Store) Touch(ctx context.Context, id string, expires time.Time) (bool, error)
+```
+
+Touch moves the expiry of `id` to `expires` and changes nothing else, owner and data included. It is an `UPDATE` of the live row and never an insert, so a session that was deleted, swept or has expired on the application's clock stays gone and Touch returns false: the framework calls it to slide a session ([`RefreshAfter`](./security.md#sessionoptions)), so a slide that races `Sessions.RevokeOwner` cannot bring the session back. It runs in the transaction of [`WithTx`](#pgsessionwithtx) when `ctx` carries one.
+
 ### `pgsession.Store.Delete`
 
 ```go

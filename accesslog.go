@@ -13,6 +13,17 @@ type AccessLogOptions struct {
 	// Level is the level of every record; slog.LevelInfo, the zero value, by default. When the
 	// logger is not enabled at this level the Observer does nothing at End, and allocates nothing.
 	Level slog.Level
+
+	// Path replaces the path of each record with what it returns, for a route whose path holds a
+	// secret, such as a capability URL (a calendar feed, a download link, a password-reset link): it
+	// is given the raw path, without the query, and returns what is logged in its place, usually
+	// that path with the secret segment swapped for a placeholder. Nil means the raw path is logged.
+	// It is called once for each logged request, on the goroutine that ends it, so it must be quick
+	// and must not block; it is not called when the logger is not enabled at Level. A panic in it
+	// is recovered and logged, and the record carries the path "[path function panicked]", never the
+	// raw path, since a function that fails must not let a secret through. It does not change the
+	// path the API document, a Trace's span or the Observer of another module sees.
+	Path func(path string) string
 }
 
 // AccessLog is the access log of ADR 0032, an Observer (ADR 0051) given with
@@ -26,7 +37,7 @@ type AccessLogOptions struct {
 //	then every attribute a Provider or middleware added with Request.AddLogAttrs (ADR 0023)
 //
 // The path is the raw path without the query, because a query is where secrets and personal data
-// go. status is what was sent: the real status of a stream, the 500 after a panic, the 503 of
+// go; a secret that must travel in the path is kept out with AccessLogOptions.Path. status is what was sent: the real status of a stream, the 500 after a panic, the 503 of
 // Timeout. size is the body bytes written, after gzip: the bytes a stream sent, the size of a
 // Problem a middleware returned, 0 for a HEAD. duration is the Outcome's, from the parsed head to
 // the last byte, on the app's clock; for a stream it is the stream's whole life. The record's
@@ -70,7 +81,7 @@ func (l *accessLog) End(ctx context.Context, req Request, out Outcome) {
 	var buf [16]slog.Attr
 	at := append(buf[:0],
 		slog.String("method", req.Method()),
-		slog.String("path", req.Path()),
+		slog.String("path", pathOf(l.o.Path, ctx, lg, req.Path())),
 		slog.Int("status", out.Status),
 		slog.Int64("size", out.Written),
 		slog.Duration("duration", out.Duration),
@@ -102,4 +113,18 @@ func (l *accessLog) End(ctx context.Context, req Request, out Outcome) {
 	r := slog.NewRecord(req.run.ended, l.o.Level, "request", 0)
 	r.AddAttrs(at...)
 	lg.Handler().Handle(ctx, r)
+}
+
+// pathOf is the path to log: the raw one, or what AccessLogOptions.Path makes of it.
+func pathOf(fn func(string) string, ctx context.Context, lg *slog.Logger, raw string) (out string) {
+	if fn == nil {
+		return raw
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			out = "[path function panicked]"
+			lg.ErrorContext(ctx, "bites: AccessLogOptions.Path panicked, so the record carries no path", "panic", r)
+		}
+	}()
+	return fn(raw)
 }

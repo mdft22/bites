@@ -2,6 +2,7 @@ package bites_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -1023,5 +1024,118 @@ func TestAUUIDOfAnotherPackageWithNoFormatIsNamedAtStartWithTheOptionThatGivesIt
 	}
 	if strings.Contains(logs.String(), "no format") {
 		t.Fatalf("a uuid type given a format is still named:\n%s", logs.String())
+	}
+}
+
+// gz is body compressed as one gzip member.
+func gz(t *testing.T, body string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	if _, err := w.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	return b.Bytes()
+}
+
+func gzReq(target string, body []byte, encoding string) bitetest.Request {
+	return bitetest.Request{Method: "POST", Target: target, Body: body, Header: map[string][]string{"Content-Type": {"application/json"}, "Content-Encoding": {encoding}}}
+}
+
+type sheetPaste struct{ Cells []string }
+
+func decompressApp(t *testing.T, opts ...bites.Option) *bitetest.Server {
+	return startWith(t, func(app *bites.App) {
+		app.Post("/paste", func(_ context.Context, in struct{ Body sheetPaste }) (int, error) { return len(in.Body.Cells), nil }, bites.Decompress(), bites.MaxBody(1024))
+		app.Post("/plain", func(_ context.Context, in struct{ Body sheetPaste }) (int, error) { return len(in.Body.Cells), nil })
+	}, opts...)
+}
+
+func TestAGzipBodyIsDecodedBeforeTheHandlerWhenTheRouteOptsInAndAnIdentityBodyIsAsBefore(t *testing.T) {
+	srv := decompressApp(t)
+	if r := srv.Do(gzReq("/paste", gz(t, `{"cells":["a","b","c"]}`), "gzip")); r.Status != 200 || r.Text() != "3" {
+		t.Fatalf("a gzip body: %d %s", r.Status, r.Text())
+	}
+	if r := srv.Do(gzReq("/paste", gz(t, `{"cells":["a"]}`), "GZIP")); r.Status != 200 {
+		t.Fatalf("the coding is matched without regard to case: %d %s", r.Status, r.Text())
+	}
+	if r := srv.Do(gzReq("/paste", []byte(`{"cells":["a","b"]}`), "identity")); r.Status != 200 || r.Text() != "2" {
+		t.Fatalf("identity: %d %s", r.Status, r.Text())
+	}
+	if r := srv.Do(jsonReq("POST", "/paste", `{"cells":["a"]}`)); r.Status != 200 {
+		t.Fatalf("no Content-Encoding: %d %s", r.Status, r.Text())
+	}
+}
+
+func TestTheDecodedSizeIsCountedAgainstMaxBodyAndABombIsA413AtTheLimit(t *testing.T) {
+	srv := decompressApp(t)
+	cells := `{"cells":["` + strings.Repeat("x", 5000) + `"]}`
+	body := gz(t, cells)
+	if len(body) >= 1024 {
+		t.Fatalf("the test body is %d bytes compressed, not under MaxBody", len(body))
+	}
+	r := srv.Do(gzReq("/paste", body, "gzip"))
+	if r.Status != 413 || !strings.Contains(r.Text(), "over the 1024 bytes this route reads once decoded from gzip") {
+		t.Fatalf("a body of 5 KB decoded under MaxBody of 1 KB: %d %s", r.Status, r.Text())
+	}
+	exact := `{"cells":["` + strings.Repeat("x", 1024-len(`{"cells":[""]}`)) + `"]}`
+	if len(exact) != 1024 {
+		t.Fatal(len(exact))
+	}
+	if r := srv.Do(gzReq("/paste", gz(t, exact), "gzip")); r.Status != 200 {
+		t.Fatalf("a body of exactly MaxBody decoded: %d %s", r.Status, r.Text())
+	}
+}
+
+func TestACompressedBodyOnARouteThatDoesNotDecodeIsA415NamingTheCodingAndNeverReachesTheJSONDecoder(t *testing.T) {
+	srv := decompressApp(t)
+	r := srv.Do(gzReq("/plain", gz(t, `{"cells":["a"]}`), "gzip"))
+	if r.Status != 415 || !strings.Contains(r.Text(), "this route does not decode a body sent with Content-Encoding: gzip; send it uncompressed") {
+		t.Fatalf("a route with no Decompress: %d %s", r.Status, r.Text())
+	}
+	r = srv.Do(gzReq("/paste", []byte("whatever"), "br"))
+	if r.Status != 415 || r.Get("accept-encoding") != "gzip" || !strings.Contains(r.Text(), "it accepts gzip, or an uncompressed body") {
+		t.Fatalf("a coding the route does not list: %d %s %v", r.Status, r.Text(), r.Header)
+	}
+}
+
+func TestABodyThatIsNotValidInItsCodingIsA400AndASeveralCodingBodyIsUndoneLastFirst(t *testing.T) {
+	srv := decompressApp(t)
+	if r := srv.Do(gzReq("/paste", []byte("not gzip at all"), "gzip")); r.Status != 400 || !strings.Contains(r.Text(), "the body is not valid gzip") {
+		t.Fatalf("a body that is not gzip: %d %s", r.Status, r.Text())
+	}
+	twice := gz(t, string(gz(t, `{"cells":["a","b"]}`)))
+	if r := srv.Do(gzReq("/paste", twice, "gzip, gzip")); r.Status != 200 || r.Text() != "2" {
+		t.Fatalf("gzip applied twice: %d %s", r.Status, r.Text())
+	}
+}
+
+func TestWithDecompressionGivesEveryRouteTheDecodersAndARoutesOwnDecompressWinsAndTheOptionsRefuseMistakes(t *testing.T) {
+	srv := startWith(t, func(app *bites.App) {
+		app.Post("/a", func(_ context.Context, in struct{ Body sheetPaste }) (int, error) { return len(in.Body.Cells), nil })
+	}, bites.WithDecompression())
+	if r := srv.Do(gzReq("/a", gz(t, `{"cells":["a"]}`), "gzip")); r.Status != 200 {
+		t.Fatalf("an app-wide gzip: %d %s", r.Status, r.Text())
+	}
+	for name, f := range map[string]func(){
+		"a nil decoder":    func() { bites.New(bites.WithDecompression(nil)) },
+		"a coding twice":   func() { bites.New(bites.WithDecompression(bites.GzipDecoder(), bites.GzipDecoder())) },
+		"the option twice": func() { bites.New(bites.WithDecompression(), bites.WithDecompression()) },
+		"a route with nil": func() {
+			bites.New().Post("/x", func(context.Context, struct{ Body sheetPaste }) (int, error) { return 0, nil }, bites.Decompress(nil))
+		},
+		"an upload route": func() {
+			bites.New().Post("/x", func(context.Context, struct{ Body bites.Upload }) (int, error) { return 0, nil }, bites.Decompress(), bites.MaxBody(1<<20))
+		},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s was not refused at Registration", name)
+				}
+			}()
+			f()
+		}()
 	}
 }

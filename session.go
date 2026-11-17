@@ -64,9 +64,10 @@ type SessionOptions struct {
 	Store SessionStore
 
 	// RefreshAfter makes a session slide: a request whose session was saved more than RefreshAfter
-	// ago gets it saved again by the framework, as if the handler had called Save with the value it
-	// loaded, so a session in use lives MaxAge from its last use and one left alone still expires.
-	// Sessions.Load saves it (in the Store, with the new expiry) and the new cookie is added to the
+	// ago gets its expiry moved by the framework, so a session in use lives MaxAge from its last use
+	// and one left alone still expires. Sessions.Load does it: with a Store by SessionStore.Touch,
+	// which changes the expiry and nothing else and never recreates a session that ended since the
+	// request loaded it, and with no Store by sealing the value again; the new cookie is added to the
 	// answer when the answer's status is under 400 and the handler set no cookie of the session's
 	// name itself, so a Save, Renew or Clear of the handler wins. Zero means never: a session lives
 	// MaxAge from the handler's last Save. It must be under MaxAge; MaxAge/2 saves a session at
@@ -87,6 +88,13 @@ type SessionStore interface {
 	// type that has a SessionOwner method: such a type needs an OwnerSessionStore, and every save
 	// goes through SaveOwned. A store written only for owned types may return an error from Save.
 	Save(ctx context.Context, id string, data []byte, expires time.Time) error
+	// Touch moves the expiry of id to expires and changes nothing else: neither the data nor, for an
+	// OwnerSessionStore, the owner. It is how a session slides (SessionOptions.RefreshAfter), and it
+	// must never create a row: when id has nothing, or has expired on bites.Now(ctx), it returns
+	// found false and writes nothing, so a session that was deleted (Sessions.RevokeOwner, Clear,
+	// Renew) stays deleted when a request that loaded it earlier slides it afterwards. It returns
+	// an error only when the store failed; a missing id is (false, nil).
+	Touch(ctx context.Context, id string, expires time.Time) (found bool, err error)
 	// Delete forgets id. Deleting an id that has nothing is not an error.
 	Delete(ctx context.Context, id string) error
 }
@@ -142,6 +150,17 @@ type Session[T any] struct {
 	id    string // the store's id, when the session came from a store
 	found bool
 }
+
+// StoreID is the id the session has in its Store, the 22 characters the Store was given by Load,
+// Save, SaveOwned, Touch and Delete: what an application keys a row on when something should live
+// and die with a browser's session (a push subscription, a list of "your sessions" with this one
+// marked, a lock or a draft per session). It is empty for a session with no Store (a cookie holds
+// the whole value), for a new session, and for one that no Sessions.Load filled. A Save of a new
+// session makes its id in that call, which the Session in hand does not learn: load the Session
+// again on the next request. Renew replaces the id likewise, and ends the old one with its Delete,
+// so a row that hangs off the old id goes with it. The id is a secret of the same kind as the
+// cookie that names it, so it is not logged or sent to the browser.
+func (s Session[T]) StoreID() string { return s.id }
 
 // sealed plaintext: a mode byte, the issue time in Unix seconds, then the JSON of T or the store id.
 const (
@@ -269,9 +288,10 @@ func ownerMethod[T any](fn string) (func(T) string, bool) {
 // everywhere", and a User who has been disabled. It needs a T with a SessionOwner method and a
 // Store that is an OwnerSessionStore, which NewSessions checked; it returns an error for a T
 // without SessionOwner, and for an empty owner, which names no one. A browser that still holds
-// the cookie of an ended session is a new session on its next request. A request that loaded the
-// session before this call and saves it after puts it back, so the Provider of the User must
-// refuse a disabled User on every request (ADR 0056).
+// the cookie of an ended session is a new session on its next request. A request that
+// loaded the session before this call and slides it (RefreshAfter) after it does not put it back,
+// because Store.Touch creates nothing; one whose handler calls Save does, so the Provider of the
+// User must refuse a disabled User on every request (ADR 0056).
 func (s *Sessions[T]) RevokeOwner(ctx context.Context, owner string) (int, error) {
 	if s.ostore == nil {
 		return 0, fmt.Errorf("bites: RevokeOwner on the Sessions of %s, which has no SessionOwner method: add func (%[1]s) SessionOwner() string and give a Store that implements OwnerSessionStore", typeLabel(reflect.TypeFor[T]()))
@@ -328,14 +348,32 @@ func sealedAt(plain []byte) time.Time {
 	return time.Unix(int64(binary.BigEndian.Uint64(plain[1:sealHead])), 0)
 }
 
-// refresh saves out again under its id and asks for the new cookie to be added to the answer of
-// req (SessionOptions.RefreshAfter). A failure is logged and the request goes on.
+// refresh moves the expiry of out to a MaxAge from now and asks for the new cookie to be added to
+// the answer of req (SessionOptions.RefreshAfter). With a Store it is Store.Touch, which writes no
+// row, so a session another request ended since this one loaded it is not brought back, and no
+// data another request saved since is overwritten; a session the Store no longer has is logged at
+// Info and gets no cookie. A failure is logged and the request goes on.
 func (s *Sessions[T]) refresh(ctx context.Context, req Request, out Session[T]) {
 	if !req.live() {
 		return
 	}
 	log := req.run.a.log
-	c, err := out.save(ctx, out.Value, false)
+	var c Cookie
+	var err error
+	if s.store == nil {
+		c, err = out.save(ctx, out.Value, false)
+	} else {
+		now := out.clk.Now()
+		var found bool
+		if found, err = s.store.Touch(ctx, out.id, now.Add(s.maxAge)); err == nil && !found {
+			log.Info("bites: a session ended before it could be refreshed, so its cookie is not extended", "cookie", s.name)
+			return
+		}
+		if err == nil {
+			raw, _ := base64.RawURLEncoding.DecodeString(out.id)
+			c, err = s.cookieFor(sealPlain(modeStore, now, raw))
+		}
+	}
 	if err == nil {
 		var b []byte
 		if b, err = appendSetCookie(nil, &c); err == nil {
@@ -480,6 +518,11 @@ func (s Session[T]) save(ctx context.Context, v T, renew bool) (Cookie, error) {
 		}
 		plain = sealPlain(modeStore, now, raw)
 	}
+	return ss.cookieFor(plain)
+}
+
+// cookieFor seals plain into the session cookie, refusing one over what a browser keeps.
+func (ss *Sessions[T]) cookieFor(plain []byte) (Cookie, error) {
 	c := ss.cookie
 	c.Value = ss.seal(plain)
 	c.MaxAge = ss.maxAge

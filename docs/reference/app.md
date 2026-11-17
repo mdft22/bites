@@ -224,6 +224,8 @@ Without a registration such a field is refused when the route is registered, bec
 
 It is refused when `New` runs, naming the line that wrote the option, for an interface or pointer type, a type the core already knows (`time.Time`, the standard library's `uuid.UUID`, `Date`, `json.RawMessage`, `jsontext.Value`), a type with no JSON method, a `Type` that is not a JSON type (including an empty one), a `Format` on an object, array, boolean or free-form type, `Nullable` on a free-form type, a type registered twice with two schemas, and a type also registered with `WithTextFormat`.
 
+A type of the app's own states its schema where it is declared instead, with a method `func (T) JSONSchema() JSONSchema`, read once at Registration on a zero value (so it must not depend on the value), on the value or the pointer receiver. It is for what a registration could not say before and still says only awkwardly from far away: a type that keeps every member a client sent, with a few it names. A type is described one way: the method on a type that is also registered is refused, as is a method of another signature (`bites_test.stamp has a JSONSchema method that is not func() bites.JSONSchema, so it would never be read`), a method on a type with no JSON method of its own (the codec writes its fields, which the method would hide), and a schema the method states that is not valid (the refusals of [`JSONSchema`](#jsonschema)). A registration remains for a type the app does not own, such as pgx's.
+
 It costs nothing per request: the check is made at Registration and the schema is read when the document is built.
 
 <!-- compiles: decls -->
@@ -246,13 +248,30 @@ Decision: [ADR 0076](../adr/0076-a-type-that-writes-its-own-json-is-described-by
 
 ```go
 type JSONSchema struct {
-	Type     string
-	Format   string
-	Nullable bool
+	Type       string
+	Format     string
+	Nullable   bool
+	Properties []JSONProperty
+	Open       bool
+	Items      *JSONSchema
 }
 ```
 
-JSONSchema is the shape [`WithJSONSchema`](#withjsonschema) declares for a type that writes its own JSON. `Type` is `string`, `number`, `integer`, `boolean`, `object` or `array`, or `any` for a value that is free-form JSON, described as `{}`; leaving it empty is refused rather than read as free-form. `Format` is the OpenAPI format of a string, number or integer. `Nullable` says the type's own method can write `null`, so a response is described as `type: [<Type>, "null"]`; a request is not, because the decoder refuses `null` for a field that is not a [`Null`](./input.md#null) before the type is asked.
+JSONSchema is the shape [`WithJSONSchema`](#withjsonschema), or a `JSONSchema` method on the type, declares for a type that writes its own JSON. `Type` is `string`, `number`, `integer`, `boolean`, `object` or `array`, or `any` for a value that is free-form JSON, described as `{}`; leaving it empty is refused rather than read as free-form. `Format` is the OpenAPI format of a string, number or integer. `Nullable` says the type's own method can write `null`, so a response is described as `type: [<Type>, "null"]`; a request is not, because the decoder refuses `null` for a field that is not a [`Null`](./input.md#null) before the type is asked.
+
+`Properties` are the named members of an `object`, each a [`JSONProperty`](#jsonproperty) with its own schema, in the order the document lists them; with none, the object is described bare, as before. When `Properties` is set, `Open` says whether members beyond them may appear: true states `additionalProperties: true`, for a type that keeps every member a client sent, and false states `additionalProperties: false`, that the listed members are all there are. `Items` is the schema of the elements of an `array`; nil leaves them unstated. `Check` returns what is wrong with a schema or nil, the same refusals `New` makes: `Properties` or `Open` on a type that is not an object, `Open` with no `Properties`, `Items` on a type that is not an array, a property with no name or a name twice, and, inside a property, any rule above, named by its path (`property "meta.n"`). The schema states and does not enforce: the type's own methods still decide what is valid.
+
+### `JSONProperty`
+
+```go
+type JSONProperty struct {
+	Name     string
+	Schema   JSONSchema
+	Required bool
+}
+```
+
+JSONProperty is one named member of a [`JSONSchema`](#jsonschema) of `Type` `object`. `Name` is its name on the wire, as the type's own methods write it, `Schema` is the shape of its value, and `Required` says a value of the type always has it, which the document lists under `required`.
 
 ### `WithRejectUnknownQueryKeys`
 
@@ -1037,6 +1056,41 @@ func GzipEncoder() Encoder
 ```
 
 GzipEncoder is the core's gzip: `compress/gzip` at `BestSpeed`, its writers pooled and never reaching user code. Its coding is `gzip`, and a client's `x-gzip` is read as gzip.
+
+### `Decoder`
+
+```go
+type Decoder interface {
+	Coding() string
+	Decode(dst, src []byte, max int64) ([]byte, error)
+}
+```
+
+A Decoder is one content coding the framework can decode a request body from, the counterpart of [`Encoder`](#encoder): [`GzipDecoder`](#gzipdecoder) from the core, `zstd.Decoder` and `brotli.Decoder` from the modules ([zstd](./zstd.md), [brotli](./brotli.md)). A route opts in with [`Decompress`](./input.md#decompress) and the app with [`WithDecompression`](#withdecompression). `Coding` is the token `Content-Encoding` names it by, a lowercase token read once at Registration. `Decode` appends the decoded form of `src` to `dst` and returns it, and must stop as soon as the decoded body would be over `max` bytes, returning [`ErrDecodedTooLarge`](#errdecodedtoolarge): the framework counts the decoded size against `MaxBody`, never the compressed one, so a small body that expands a thousandfold is a 413 at the limit and not an allocation of its own size. Any other error means `src` is not valid in the coding, and is a 400. It is called from many connections at once and must keep neither slice past its return, because `src` is the request's own buffer. A panic in `Decode` is recovered and answered as a 400. Decision: [ADR 0044](../adr/0044-the-body-type-decides-how-a-body-is-read.md).
+
+### `GzipDecoder`
+
+```go
+func GzipDecoder() Decoder
+```
+
+GzipDecoder is the core's gzip Decoder: `compress/gzip`, its readers pooled and never reaching user code. A body of several gzip members is decoded as one, as RFC 1952 says. Its coding is `gzip`.
+
+### `ErrDecodedTooLarge`
+
+```go
+var ErrDecodedTooLarge error
+```
+
+ErrDecodedTooLarge is what a [`Decoder`](#decoder) returns when the decoded body would be over the `max` it was given. The framework answers it with a 413 naming the route's `MaxBody`.
+
+### `WithDecompression`
+
+```go
+func WithDecompression(decoders ...Decoder) Option
+```
+
+WithDecompression is [`Decompress`](./input.md#decompress) for every route of the app that reads a JSON, form, `Raw` or `[]byte` Body; a route or a group may give its own `Decompress` to list other codings. With no argument it is gzip alone. It panics at `New`, naming the line, for what `Decompress` refuses and when it is given twice. A route whose Body is a stream (`Multipart`, `Upload`, `BodyReader`) is not decoded and is not refused by this option.
 
 ### `MinCompressSize`
 

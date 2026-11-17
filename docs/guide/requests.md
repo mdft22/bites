@@ -250,7 +250,50 @@ func newApp() *bites.App {
 }
 ```
 
+**A type of your own states its schema where it is declared, and can name its members.** A type that keeps every member a client sent (a document editor's node, a form builder's field) writes itself through `MarshalJSON`, and a registration far from it could say only `any`. Give the type a method `func (T) JSONSchema() bites.JSONSchema`, read once at Registration on a zero value, and name the members the clients read; `Open` leaves the rest open, which the document says as `additionalProperties: true`:
+
+<!-- compiles: decls -->
+```go
+type Node struct{ raw []byte } // keeps every member an editor sent
+
+func (n Node) MarshalJSON() ([]byte, error) { return n.raw, nil }
+
+func (n *Node) UnmarshalJSON(b []byte) error { n.raw = append(n.raw[:0], b...); return nil }
+
+func (Node) JSONSchema() bites.JSONSchema {
+	return bites.JSONSchema{
+		Type: "object",
+		Open: true,
+		Properties: []bites.JSONProperty{
+			{Name: "id", Schema: bites.JSONSchema{Type: "string"}, Required: true},
+			{Name: "x", Schema: bites.JSONSchema{Type: "number"}},
+		},
+	}
+}
+```
+
+A type is described one way: a type with the method that is also given to `WithJSONSchema` is refused, as is one with a method that is not `func() bites.JSONSchema` and one whose JSON is written from its fields.
+
 A `json.RawMessage` field is free-form by name and needs nothing. A type with only a text form is a string already, and takes [`WithTextFormat`](../reference/app.md#withtextformat) when it needs a format. A member that is "any JSON" accepts `null` as the bytes `null`; one whose shape the document should state, though the app does not decode it, is a [`RawJSON[T]`](../reference/input.md#rawjson) ([ADR 0087](../adr/0087-a-json-value-the-app-owns-is-raw-json-bytes-documented-as-a-type.md)).
+
+## A compressed request body
+
+**A body sent with `Content-Encoding: gzip` is refused with a 415 until the route says it decodes it.** Large JSON (a pasted sheet, a bulk import) compresses about 14 to 1, which saves time on a slow uplink and room under `MaxBody`. Give the route, a group or the app the codings it takes; the handler then reads the decoded body as if it had been sent plain:
+
+<!-- compiles: decls -->
+```go
+func newPasteApp() *bites.App {
+	app := bites.New()
+	app.Post("/sheets/{id}/paste", paste, bites.Decompress(), bites.MaxBody(8<<20)) // gzip alone
+	return app
+}
+
+func paste(ctx context.Context, in struct{ Body struct{ Cells []string } }) (int, error) {
+	return len(in.Body.Cells), nil
+}
+```
+
+[`MaxBody`](../reference/input.md#maxbody) counts the decoded size, never the compressed one, so a small body that expands a thousandfold is a 413 at the limit. A coding the route does not list is a 415 that says which it accepts, and a body that is not valid in its coding is a 400. `zstd.Decoder()` and `brotli.Decoder()` from the modules add `zstd` and `br`: `bites.Decompress(zstd.Decoder(), bites.GzipDecoder())`. Give every route the same codings with [`WithDecompression`](../reference/app.md#withdecompression). A `Multipart`, `Upload` or `BodyReader` body is a stream and is not decoded. See [`Decompress`](../reference/input.md#decompress).
 
 ## A body that may be absent
 

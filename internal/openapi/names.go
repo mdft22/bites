@@ -83,8 +83,8 @@ func render(v any, ref func(key) (string, Schema)) any {
 		}
 		out := make(Schema, len(x))
 		for k, e := range x {
-			if r, ok := e.(refTo); ok && k == "$ref" {
-				out[k], _ = ref(r.k)
+			if r, ok := e.(refTo); ok {
+				out[k], _ = ref(r.k) // a "$ref", or a value of a discriminator's mapping
 				continue
 			}
 			out[k] = render(e, ref)
@@ -117,19 +117,22 @@ func (r *Registry) finalize() (*finalized, error) {
 		if c := strings.Compare(a.t.String(), b.t.String()); c != 0 {
 			return c
 		}
+		if c := strings.Compare(a.v, b.v); c != 0 {
+			return c
+		}
 		return int(a.m) - int(b.m)
 	})
 
 	// Group the modes of one type, then split a group whose members differ, until stable.
 	group := map[key]int{}
-	byType := map[reflect.Type]int{}
+	byType := map[ident2]int{}
 	next := 0
 	for _, k := range keys {
-		g, ok := byType[k.t]
+		g, ok := byType[k.id()]
 		if !ok {
 			g = next
 			next++
-			byType[k.t] = g
+			byType[k.id()] = g
 		}
 		group[k] = g
 	}
@@ -236,18 +239,21 @@ func (r *Registry) finalize() (*finalized, error) {
 		}
 	}
 	// A type with more than one group is split; count distinct groups.
-	groupsOf := map[reflect.Type]map[int]bool{}
+	groupsOf := map[ident2]map[int]bool{}
 	for _, k := range keys {
-		if groupsOf[k.t] == nil {
-			groupsOf[k.t] = map[int]bool{}
+		if groupsOf[k.id()] == nil {
+			groupsOf[k.id()] = map[int]bool{}
 		}
-		groupsOf[k.t][group[k]] = true
+		groupsOf[k.id()][group[k]] = true
 	}
 	f := &finalized{names: map[key]string{}, comps: map[string]Schema{}, inline: inline}
 	used := map[string]key{}
 	for _, k := range keys {
 		n := typeName[k.t]
-		if len(groupsOf[k.t]) > 1 {
+		if k.v != "" {
+			n += "." + pascal(k.v)
+		}
+		if len(groupsOf[k.id()]) > 1 {
 			n += "." + k.m.String()
 		}
 		f.names[k] = n
@@ -275,6 +281,37 @@ func (r *Registry) finalize() (*finalized, error) {
 	}
 	r.final = f
 	return f, nil
+}
+
+// ident2 is what a component is one of: a type, or a variant of a tagged union.
+type ident2 struct {
+	t reflect.Type
+	v string
+}
+
+func (k key) id() ident2 { return ident2{k.t, k.v} }
+
+// pascal is a tag written in Pascal case, for the name of a union's variant component: "draft_ref"
+// is DraftRef. Anything outside A-Z a-z 0-9 ends a word.
+func pascal(tag string) string {
+	var b strings.Builder
+	up := true
+	for _, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z':
+			if up {
+				r -= 'a' - 'A'
+			}
+			b.WriteRune(r)
+			up = false
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			up = false
+		default:
+			up = true
+		}
+	}
+	return b.String()
 }
 
 // An anonymous struct that is a request Body is named after the Input that holds it

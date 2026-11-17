@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -307,5 +307,47 @@ func TestTheAccessLogOfAFailedRequestCarriesTheApplicationsErrorAndADecodingErro
 	}
 	if _, ok := recs[1]["error"]; recs[1]["status"] != 400.0 || ok {
 		t.Errorf("a 400 the framework wrote has no error: %v", recs[1])
+	}
+}
+
+func TestTheAccessLogPathOptionReplacesThePathOfEveryRecordAndALogThatNeverSawTheSecretHasIt(t *testing.T) {
+	hide := func(p string) string {
+		if rest, ok := strings.CutPrefix(p, "/feed/"); ok && rest != "" {
+			return "/feed/[secret]"
+		}
+		return p
+	}
+	srv, lb := startJSON(t, bitetest.NewClock(), func(app *bites.App) {
+		app.Get("/feed/{token}", func(_ context.Context, in struct{ Path struct{ Token string } }) (string, error) {
+			return "ics", nil
+		})
+		app.Get("/users/{id}", getUser)
+	}, bites.WithObserver(bites.AccessLog(bites.AccessLogOptions{Path: hide})))
+	srv.Do(req("GET", "/feed/s3cr3t-token"))
+	srv.Do(req("GET", "/users/7"))
+	srv.Do(req("GET", "/feed/another-s3cr3t/missing")) // a 404 under the same prefix is logged hidden too
+	recs := waitRecords(t, srv, lb, 3)
+	got := []any{recs[0]["path"], recs[1]["path"], recs[2]["path"]}
+	if fmt.Sprint(got) != "[/feed/[secret] /users/7 /feed/[secret]]" {
+		t.Fatalf("paths logged: %v", got)
+	}
+	if strings.Contains(lb.String(), "s3cr3t") {
+		t.Fatalf("a secret reached the log:\n%s", lb)
+	}
+}
+
+func TestTheAccessLogPathOptionThatPanicsLogsAPlaceholderNeverTheRawPath(t *testing.T) {
+	srv, lb := startJSON(t, bitetest.NewClock(), func(app *bites.App) {
+		app.Get("/feed/{token}", func(_ context.Context, in struct{ Path struct{ Token string } }) (string, error) {
+			return "ics", nil
+		})
+	}, bites.WithObserver(bites.AccessLog(bites.AccessLogOptions{Path: func(string) string { panic("redaction broke") }})))
+	srv.Do(req("GET", "/feed/s3cr3t-token"))
+	m := waitRecords(t, srv, lb, 1)[0]
+	if m["path"] != "[path function panicked]" {
+		t.Fatalf("path = %v", m["path"])
+	}
+	if strings.Contains(lb.String(), "s3cr3t") || !strings.Contains(lb.String(), "AccessLogOptions.Path panicked") {
+		t.Fatalf("the secret leaked or the failure was not logged:\n%s", lb)
 	}
 }

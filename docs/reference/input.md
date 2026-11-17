@@ -1155,6 +1155,20 @@ func BodyTimeout(d time.Duration) RouteOption
 
 BodyTimeout sets how long this route (or every route of this group) waits for its whole body; over it is a 408 and the connection is closed. It must be positive. The default is `Limits.BodyTimeout`, 30 s, unless `MaxBody` makes `max(30 s, MaxBody / 128 KiB/s)` longer: that is the default of every route with a request body, an Upload and a BodyReader included, so a route with `MaxBody(8 MiB)` waits 64 s. The start-up log names a route whose timeout was derived.
 
+### `Decompress`
+
+```go
+func Decompress(decoders ...Decoder) RouteOption
+```
+
+Decompress makes this route (or every route of this group) decode a request body that arrives with `Content-Encoding`, with the [`Decoder`](./app.md#decoder)s it lists, or gzip alone when it lists none. The decoded body is what the handler's `Body` section reads, and its size is counted against [`MaxBody`](#maxbody), never the compressed size: a body that expands past the limit is a 413 at the limit (`the body is over the 1024 bytes this route reads once decoded from gzip`), whatever its ratio. Several codings (`Content-Encoding: gzip, br`) are undone last first; `identity` is skipped; a coding is matched without regard to case.
+
+A body sent in a coding the route does not list is a 415 that names the codings it accepts, with them in `Accept-Encoding` (`this route does not decode Content-Encoding: br; it accepts gzip, or an uncompressed body`), and a body that is not valid in its coding is a 400 (`the body is not valid gzip`). Without `Decompress`, [`WithDecompression`](./app.md#withdecompression) or a group's, a request with a `Content-Encoding` other than `identity` is a 415 that says so (`this route does not decode a body sent with Content-Encoding: gzip; send it uncompressed`): compressed bytes are never handed to a JSON decoder. The innermost option wins.
+
+It covers a JSON, form, `Raw` and `[]byte` Body. A `Multipart`, `Upload` or `BodyReader` Body is a stream the framework does not decode, and `Decompress` on its route is a Registration panic (an app-wide `WithDecompression` leaves such a route alone). A nil Decoder, a `Coding` that is not a lowercase token (or is `identity` or `*`) and a coding listed twice are refused naming the option. It costs nothing for a request without `Content-Encoding`: one scan of the head's headers for the name; a compressed request allocates its decoded body, which is the heap's and not pooled.
+
+Decision: [ADR 0044](../adr/0044-the-body-type-decides-how-a-body-is-read.md).
+
 ### `MaxParts`
 
 ```go

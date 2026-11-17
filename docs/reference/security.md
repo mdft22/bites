@@ -200,12 +200,15 @@ SecurityScheme is how a request sends the credential a [`CustomAuth`](#customaut
 
 ```go
 type AuthOptions struct {
-	Realm  string
-	Header string
+	Realm     string
+	Header    string
+	Recognise func(token string) bool
 }
 ```
 
 AuthOptions configures the three auth Providers. `Realm` is the realm of the challenge, `api` when empty, printable ASCII without a double quote or a backslash. `Header` is the header `APIKeyAuth` reads, `X-API-Key` when empty; it is refused on `BearerAuth` and `BasicAuth`.
+
+`Recognise` is for `BearerAuth`: it says whether a Bearer token is one of the Provider's own, so that a token it does not own is left to the next credential. It decides what counts as present. A token it returns false for is as if the request had sent none: an `Opt` of the Provider is absent instead of a 401, an alternative of `AnyAuth` is skipped, and the Provider itself answers 401 with the plain challenge (`a Bearer token of this API is required: the one sent is not one it recognises`) without running `verify`. It is for an app whose route also serves browsers by a cookie while a proxy in front (oauth2-proxy, IAP, Cloudflare Access) adds its own `Authorization: Bearer <jwt>`: a typical `Recognise` checks a prefix the app puts on its tokens or the shape of its own JWT. A token it returns true for goes to `verify`, and a `verify` that rejects it is still a 401. It is called with the token of every request that carries the Bearer scheme, on the goroutine that serves it, so it must be quick, must not block and must not keep the token. The API document is unchanged and still lists the scheme. An `Authorization` header sent twice is present whatever `Recognise` says, and answers its 400. Nil means every Bearer token is the Provider's own. It is refused on `BasicAuth` and `APIKeyAuth` (`BasicAuth: Recognise is set, but BasicAuth has no Bearer token to recognise; Recognise is for BearerAuth`).
 
 ### `ErrInvalidCredentials`
 
@@ -356,6 +359,14 @@ func (s Session[T]) IsNew() bool
 
 IsNew reports whether the request came with no session: no cookie, one that did not open, or one that had expired.
 
+### `Session.StoreID`
+
+```go
+func (s Session[T]) StoreID() string
+```
+
+StoreID is the id the session has in its `Store`: the 22 characters the store was given by `Load`, `Save`, `SaveOwned`, `Touch` and `Delete`. It is what an application keys a row on when something should live and die with a browser's session, such as a push subscription, a list of "your sessions" with this one marked, or a lock or a draft per session. It is empty for a session with no `Store` (the cookie holds the whole value), for a new session, and for one no `Sessions.Load` filled. A `Save` of a new session makes its id in that call, which the `Session` in hand does not learn: load it again on the next request. `Renew` replaces the id and deletes the old one, so a row hung off the old id goes with it. The id is a secret of the same kind as the cookie that names it: do not log it or send it to the browser; key rows on a hash of it, as `pgsession` does.
+
 ### `Session.Save`
 
 ```go
@@ -409,7 +420,7 @@ type SessionOptions struct {
 }
 ```
 
-SessionOptions configures `NewSessions`. `Keys` are 32 random bytes each; the first seals and every one opens, so a key is rotated by putting the new one first and dropping the old one after `MaxAge`. `Cookie` is `__Host-session` when empty (`session` when `Domain`, another `Path` or `NotSecure` rule the prefix out). `MaxAge` is 24 hours when zero, sealed in the cookie and checked on every request. The cookie is always `HttpOnly`, and `Secure` and `SameSite=Lax` unless loosened. `RefreshAfter` makes a session slide: a request whose session was saved more than `RefreshAfter` ago gets it saved again by the framework, as `Save` would with the value loaded, so a session in use lives `MaxAge` from its last use and one left alone still expires. `Load` saves it (in the `Store`, with the new expiry, under the same id) and adds the new cookie to the answer when its status is under 400 and the answer sets no cookie of the session's name itself, so a `Save`, `Renew` or `Clear` of the handler wins; a WebSocket's 101 is not refreshed. Zero is never. It must be under `MaxAge`, and `MaxAge/2` saves a session at most twice a `MaxAge`. A refresh that fails is logged at Warn (`bites: a session was not refreshed; it keeps the expiry of its last Save`) and the request goes on. A refresh racing `RevokeOwner` can put a deleted row back, as a `Save` can; the Provider of the User must refuse a disabled User on every request.
+SessionOptions configures `NewSessions`. `Keys` are 32 random bytes each; the first seals and every one opens, so a key is rotated by putting the new one first and dropping the old one after `MaxAge`. `Cookie` is `__Host-session` when empty (`session` when `Domain`, another `Path` or `NotSecure` rule the prefix out). `MaxAge` is 24 hours when zero, sealed in the cookie and checked on every request. The cookie is always `HttpOnly`, and `Secure` and `SameSite=Lax` unless loosened. `RefreshAfter` makes a session slide: a request whose session was saved more than `RefreshAfter` ago gets its expiry moved by the framework, so a session in use lives `MaxAge` from its last use and one left alone still expires. `Load` does it: with a `Store` by [`SessionStore.Touch`](#sessionstore), which changes the expiry and nothing else, under the same id; with none by sealing the value again. It adds the new cookie to the answer when its status is under 400 and the answer sets no cookie of the session's name itself, so a `Save`, `Renew` or `Clear` of the handler wins; a WebSocket's 101 is not refreshed. Zero is never. It must be under `MaxAge`, and `MaxAge/2` saves a session at most twice a `MaxAge`. A refresh that fails is logged at Warn (`bites: a session was not refreshed; it keeps the expiry of its last Save`) and the request goes on. A refresh never recreates a session that ended since the request loaded it: `Touch` finds no row, the slide is logged at Info (`bites: a session ended before it could be refreshed, so its cookie is not extended`) and the answer carries no new cookie, so a `RevokeOwner` ("sign out everywhere") holds against a request in flight. A `Save` in a handler still puts a deleted row back, so the Provider of the User must refuse a disabled User on every request.
 
 ### `SessionStore`
 
@@ -417,11 +428,12 @@ SessionOptions configures `NewSessions`. `Keys` are 32 random bytes each; the fi
 type SessionStore interface {
 	Load(ctx context.Context, id string) (data []byte, found bool, err error)
 	Save(ctx context.Context, id string, data []byte, expires time.Time) error
+	Touch(ctx context.Context, id string, expires time.Time) (found bool, err error)
 	Delete(ctx context.Context, id string) error
 }
 ```
 
-SessionStore keeps sessions on the server, for a value too large for a cookie or a session that must be revoked at once. An id is 22 characters of base64url over 16 random bytes; the data is the JSON of `T`. `Load` judges whether a session has expired on `bites.Now(ctx)`, the clock that computed `expires`, never on its own clock or a database's `now()`, so a store and the cookie agree and a test on `bitetest.Clock` moves both; a store with a TTL of its own (Redis) sets it to `expires` minus `bites.Now(ctx)`. `Save` is not called for a `T` that has a `SessionOwner` method, whose saves all go through [`OwnerSessionStore.SaveOwned`](#ownersessionstore), so a store written only for owned types may return an error from it.
+SessionStore keeps sessions on the server, for a value too large for a cookie or a session that must be revoked at once. An id is 22 characters of base64url over 16 random bytes; the data is the JSON of `T`. `Load` judges whether a session has expired on `bites.Now(ctx)`, the clock that computed `expires`, never on its own clock or a database's `now()`, so a store and the cookie agree and a test on `bitetest.Clock` moves both; a store with a TTL of its own (Redis) sets it to `expires` minus `bites.Now(ctx)`. `Save` is not called for a `T` that has a `SessionOwner` method, whose saves all go through [`OwnerSessionStore.SaveOwned`](#ownersessionstore), so a store written only for owned types may return an error from it. `Touch` moves the expiry of `id` to `expires` and changes nothing else, neither the data nor the owner; it is how a session slides, and it must never create a row: for an `id` with nothing, or one expired on `bites.Now(ctx)`, it returns `found` false and writes nothing, so a session that was deleted stays deleted. A missing id is `(false, nil)`; an error is the store failing. A store written before `Touch` existed must add it: in SQL it is an `UPDATE ... WHERE id = $1 AND expires > $2`, in Redis an `EXPIRE` that does nothing for a missing key. `bitetest.TestSessionStore` and `TestOwnerSessionStore` hold a store to it.
 
 ### `OwnerSessionStore`
 

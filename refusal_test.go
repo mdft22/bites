@@ -1025,13 +1025,13 @@ func TestEveryMistakeIsRefusedAtRegistrationWithTheMessageWrittenForIt(t *testin
 		{"a pointer in Body", func(a *bites.App) { here(); a.Post("/x", ok[BodyPtr]) },
 			"POST /x: BodyPtr.Body.Note: a pointer cannot say whether nil meant absent or null, use Opt[T] or Null[T]", false},
 		{"a Body field that decodes itself and has no registered schema", func(a *bites.App) { here(); a.Post("/x", ok[BodyStamp]) },
-			`POST /x: BodyStamp.Body.At: bites_test.stamp decodes itself through its own UnmarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or with JSONSchema{Type: "any"} if it really is free-form JSON`, false},
+			`POST /x: BodyStamp.Body.At: bites_test.stamp decodes itself through its own UnmarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or, for a type of your own, give it a method func (bites_test.stamp) JSONSchema() JSONSchema, or state JSONSchema{Type: "any"} if it really is free-form JSON`, false},
 		{"a Body list whose elements decode themselves and have no registered schema", func(a *bites.App) { here(); a.Post("/x", ok[BodyStamps]) },
-			`POST /x: BodyStamps.Body.Ats[]: bites_test.stamp decodes itself through its own UnmarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or with JSONSchema{Type: "any"} if it really is free-form JSON`, false},
+			`POST /x: BodyStamps.Body.Ats[]: bites_test.stamp decodes itself through its own UnmarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or, for a type of your own, give it a method func (bites_test.stamp) JSONSchema() JSONSchema, or state JSONSchema{Type: "any"} if it really is free-form JSON`, false},
 		{"an output field that encodes itself and has no registered schema", func(a *bites.App) { here(); a.Get("/x", out[StampOut]) },
-			`GET /x: the output type cannot be written as JSON: StampOut.At: bites_test.stamp encodes itself through its own MarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or with JSONSchema{Type: "any"} if it really is free-form JSON`, false},
+			`GET /x: the output type cannot be written as JSON: StampOut.At: bites_test.stamp encodes itself through its own MarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or, for a type of your own, give it a method func (bites_test.stamp) JSONSchema() JSONSchema, or state JSONSchema{Type: "any"} if it really is free-form JSON`, false},
 		{"an output map of lists that encodes itself and has no registered schema", func(a *bites.App) { here(); a.Get("/x", out[StampsOut]) },
-			`GET /x: the output type cannot be written as JSON: StampsOut.By[key][]: bites_test.stamp encodes itself through its own MarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or with JSONSchema{Type: "any"} if it really is free-form JSON`, false},
+			`GET /x: the output type cannot be written as JSON: StampsOut.By[key][]: bites_test.stamp encodes itself through its own MarshalJSON, so the API document cannot see its shape and would describe it as {}: register it with WithJSONSchema[bites_test.stamp](JSONSchema{Type: ..., Format: ...}), or, for a type of your own, give it a method func (bites_test.stamp) JSONSchema() JSONSchema, or state JSONSchema{Type: "any"} if it really is free-form JSON`, false},
 		{"an interface in Body", func(a *bites.App) { here(); a.Post("/x", ok[BodyAny]) },
 			"POST /x: BodyAny.Body.Extra: a field of interface type cannot be decoded", false},
 		{"a Body that is a string", func(a *bites.App) { here(); a.Post("/x", ok[BodyString]) },
@@ -1971,6 +1971,30 @@ func TestEveryMistakeIsRefusedAtRegistrationWithTheMessageWrittenForIt(t *testin
 			bites.BearerAuth(at(verifyToken), bites.AuthOptions{Header: "X-Token"})
 		},
 			`BearerAuth: Header is "X-Token", but BearerAuth reads Authorization, as its RFC says; Header is for APIKeyAuth`, false},
+		{"BasicAuth with a Recognise is refused at construction", func(*bites.App) {
+			bites.BasicAuth(at(basicNobody), bites.AuthOptions{Recognise: func(string) bool { return true }})
+		},
+			"BasicAuth: Recognise is set, but BasicAuth has no Bearer token to recognise; Recognise is for BearerAuth", false},
+		{"APIKeyAuth with a Recognise is refused at construction", func(*bites.App) {
+			bites.APIKeyAuth(at(verifyToken), bites.AuthOptions{Recognise: func(string) bool { return true }})
+		},
+			"APIKeyAuth: Recognise is set, but APIKeyAuth has no Bearer token to recognise; Recognise is for BearerAuth", false},
+		{"WithDecompression with a nil Decoder", func(*bites.App) { here(); bites.New(bites.WithDecompression(nil)) },
+			"WithDecompression: Decoders[0] is nil", false},
+		{"WithDecompression with a coding twice", func(*bites.App) { here(); bites.New(bites.WithDecompression(bites.GzipDecoder(), bites.GzipDecoder())) },
+			`WithDecompression: Decoders[1] has the coding "gzip", as Decoders[0] has: list each coding once`, false},
+		{"WithDecompression given twice", func(*bites.App) { here(); bites.New(bites.WithDecompression(), bites.WithDecompression()) },
+			"WithDecompression: it is given twice: give one WithDecompression that lists every Decoder", false},
+		{"Decompress with a nil Decoder", func(a *bites.App) { here(); a.Post("/x", ok[BodyPtrFree], bites.Decompress(nil)) },
+			"POST /x: Decompress: Decoders[0] is nil", false},
+		{"Decompress on an Upload route", func(a *bites.App) { here(); a.Post("/x", ok[UploadBody], bites.Decompress(), bites.MaxBody(1<<20)) },
+			"POST /x: UploadBody.Body is read as a stream, which the framework does not decode, but the route is given Decompress: a compressed Multipart, Upload or BodyReader body is not supported, so drop Decompress from this route (an app-wide WithDecompression leaves such a route alone)", false},
+		{"WithWebSocketCompression with a negative MinSize", func(*bites.App) { here(); bites.New(bites.WithWebSocketCompression(bites.WebSocketCompression{MinSize: -1})) },
+			"WithWebSocketCompression: MinSize is -1, which is not a size: give a number of bytes, or zero for the default of 256", false},
+		{"WithWebSocketCompression given twice", func(*bites.App) {
+			here(); bites.New(bites.WithWebSocketCompression(bites.WebSocketCompression{}), bites.WithWebSocketCompression(bites.WebSocketCompression{}))
+		},
+			"WithWebSocketCompression: it is given twice: give one WebSocketCompression", false},
 		{"APIKeyAuth with a header that is not a token is refused at construction", func(*bites.App) {
 			bites.APIKeyAuth(at(verifyToken), bites.AuthOptions{Header: "X Key"})
 		},
@@ -2809,3 +2833,93 @@ type (
 
 // clashingMembers has a field written as "title", which the problem body already has.
 type clashingMembers struct{ Title string }
+
+// Types whose JSONSchema method is wrong in each way a refusal names (ADR 0076).
+type (
+	BodyPtrFree struct{ Body struct{ A int } }
+	UploadBody  struct{ Body bites.Upload }
+	schemaWrongSig struct{ raw []byte }
+	schemaNoJSON   struct{ A int }
+	schemaInvalid  struct{ raw []byte }
+	schemaTwice    struct{ raw []byte }
+
+	OutWrongSig struct{ N schemaWrongSig }
+	OutNoJSON   struct{ N schemaNoJSON }
+	OutInvalid  struct{ N schemaInvalid }
+	OutTwice    struct{ N schemaTwice }
+)
+
+func (s schemaWrongSig) MarshalJSON() ([]byte, error) { return s.raw, nil }
+func (schemaWrongSig) JSONSchema() string             { return "object" }
+
+func (schemaNoJSON) JSONSchema() bites.JSONSchema { return bites.JSONSchema{Type: "object"} }
+
+func (s schemaInvalid) MarshalJSON() ([]byte, error) { return s.raw, nil }
+func (schemaInvalid) JSONSchema() bites.JSONSchema {
+	return bites.JSONSchema{Type: "object", Open: true}
+}
+
+func (s schemaTwice) MarshalJSON() ([]byte, error) { return s.raw, nil }
+func (schemaTwice) JSONSchema() bites.JSONSchema   { return bites.JSONSchema{Type: "object"} }
+
+func TestAJSONSchemaMethodThatCannotBeReadIsRefusedNamingWhatToChange(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		reg  func(*bites.App)
+		opts []bites.Option
+		want string
+	}{
+		{"a method with another signature", func(a *bites.App) { a.Get("/x", out[OutWrongSig]) }, nil,
+			"GET /x: the API description cannot describe the response OutWrongSig: schemaWrongSig: bites_test.schemaWrongSig has a JSONSchema method that is not func() bites.JSONSchema, so it would never be read: change its signature to return the shape its own JSON methods write, or rename it"},
+		{"a method on a type with no JSON method", func(a *bites.App) { a.Get("/x", out[OutNoJSON]) }, nil,
+			"GET /x: the API description cannot describe the response OutNoJSON: schemaNoJSON: bites_test.schemaNoJSON has a JSONSchema method but no JSON method of its own, so its JSON is written from its fields and the method would hide them: drop the method, or give the type MarshalJSON"},
+		{"a method that states a schema that is not valid", func(a *bites.App) { a.Get("/x", out[OutInvalid]) }, nil,
+			`GET /x: the API description cannot describe the response OutInvalid: schemaInvalid: the JSONSchema method of bites_test.schemaInvalid states a schema that is not valid: Open is set but there are no Properties: Open says an object with Properties has members beyond them; for an object whose members are not stated, give Type "object" alone`},
+		{"a method and a WithJSONSchema for the same type", func(a *bites.App) { a.Get("/x", out[OutTwice]) },
+			[]bites.Option{bites.WithJSONSchema[schemaTwice](bites.JSONSchema{Type: "object"})}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				got := fmt.Sprint(r)
+				if c.want == "" {
+					c.want = "WithJSONSchema[schemaTwice]: it states its schema through a JSONSchema method, and a type is described one way: drop the method, or this registration"
+				}
+				if r == nil || !strings.HasPrefix(got, c.want) {
+					t.Fatalf("recovered %q\nwant      %q", got, c.want)
+				}
+			}()
+			app := bites.New(c.opts...)
+			c.reg(app)
+		})
+	}
+}
+
+func TestAPropertyOfAJSONSchemaIsRefusedWhenItHasNoNameTwiceTheNameOrOpenWithNoProperties(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		s    bites.JSONSchema
+		want string
+	}{
+		{"no name", bites.JSONSchema{Type: "object", Properties: []bites.JSONProperty{{Schema: bites.JSONSchema{Type: "string"}}}},
+			"a property has no Name: give the member's name on the wire"},
+		{"a name twice", bites.JSONSchema{Type: "object", Properties: []bites.JSONProperty{{Name: "a", Schema: bites.JSONSchema{Type: "string"}}, {Name: "a", Schema: bites.JSONSchema{Type: "string"}}}},
+			`the property "a" is listed twice`},
+		{"a bad schema inside a property", bites.JSONSchema{Type: "object", Properties: []bites.JSONProperty{{Name: "meta", Schema: bites.JSONSchema{Type: "object", Properties: []bites.JSONProperty{{Name: "n", Schema: bites.JSONSchema{Type: "text"}}}}}}},
+			`the type is "text", which is not a JSON type: give one of string, number, integer, boolean, object, array, any (property "meta.n")`},
+		{"properties on a string", bites.JSONSchema{Type: "string", Properties: []bites.JSONProperty{{Name: "a", Schema: bites.JSONSchema{Type: "string"}}}},
+			`Properties and Open belong to an object, and the type is "string"`},
+		{"items on an object", bites.JSONSchema{Type: "object", Items: &bites.JSONSchema{Type: "string"}},
+			`Items belongs to an array, and the type is "object"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				got := fmt.Sprint(recover())
+				if want := "WithJSONSchema[stamp]: " + c.want; !strings.HasPrefix(got, want) {
+					t.Fatalf("recovered %q\nwant      %q", got, want)
+				}
+			}()
+			bites.New(bites.WithJSONSchema[stamp](c.s))
+		})
+	}
+}

@@ -220,6 +220,21 @@ func newRooms(broker bites.Broker) *bites.Topics[RoomFrame] {
 }
 ```
 
+**The server's own code hears one key of the family with [`Listen`](../reference/websocket.md#topicslisten).** `stop, err := rooms.Listen("7", func(f RoomFrame) { ... })` calls the function with every message of key `7`, after `Resolve`, with no Socket: for a cache that drops an entry per key, and for a test of what the family delivers that needs no WebSocket route. The key is held while a function listens, as it is while a Socket is subscribed.
+
+## Compressing the frames
+
+**Turn on permessage-deflate and the JSON frames go compressed to every browser that asks.** A protocol of presence snapshots, collaborative operations or streamed text repeats the same keys, and compresses well:
+
+<!-- compiles: decls -->
+```go
+func newChatApp() *bites.App {
+	return bites.New(bites.WithWebSocketCompression(bites.WebSocketCompression{MinSize: 256}))
+}
+```
+
+It is off by default and keeps no memory for a socket: every message is compressed on its own (no context takeover), so a thousand idle sockets cost what they did. A message under `MinSize` is sent plain. A Topic compresses a message once for all its sockets. A message a client sends compressed is held to the route's [`MaxMessage`](../reference/websocket.md#maxmessage) once inflated, so a small message cannot hold more than a plain one. See [`WithWebSocketCompression`](../reference/websocket.md#withwebsocketcompression) and [ADR 0040](../adr/0040-no-permessage-deflate-for-now.md).
+
 ## Leaving one socket out of a message
 
 **A message that every socket of a Topic should get, except the ones whose user muted its sender, is one Topic with [`SubscribeUnless`](../reference/websocket.md#topicsubscribeunless).** Subscribe the socket with a function that returns true for the messages it must not get; the others still get them, and the message is still framed once. The function reads the user's current state, so a mute needs no new subscription:

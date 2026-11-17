@@ -243,6 +243,9 @@ func (c *compiler) compileInput(t reflect.Type) (*inputPlan, error) {
 			if b.kind == bodyUpload && !c.cfg.maxBodySet {
 				return nil, refusalf("%s is an Upload, but the route has no MaxBody: how much a route may receive is the application's decision (an avatar wants 2 MiB, a video 2 GiB), so there is no default; give MaxBody(n) to the route or to a group above it", where)
 			}
+			if c.cfg.decodersSet && (b.kind == bodyReader || b.kind == bodyUpload || b.kind == bodyMultipart) {
+				return nil, refusalf("%s is read as a stream, which the framework does not decode, but the route is given Decompress: a compressed Multipart, Upload or BodyReader body is not supported, so drop Decompress from this route (an app-wide WithDecompression leaves such a route alone)", where)
+			}
 			p.body = b
 		default:
 			provided = append(provided, providedField{goPath: where, t: f.Type, off: f.Offset})

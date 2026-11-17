@@ -33,6 +33,11 @@ type Event struct {
 	// owns instead, valid until the next call to Feed.
 	Payload []byte
 
+	// Compressed: KindData, on the first chunk of a message: the message is compressed (RSV1 was set
+	// on its first frame with permessage-deflate negotiated, RFC 7692). The Reader then checks no
+	// UTF-8: what is checked is the message once the engine has inflated it.
+	Compressed bool
+
 	Start bool // KindData: the first chunk of a message
 	End   bool // KindData: the last chunk of a message; a text message is valid UTF-8 as a whole
 
@@ -69,6 +74,10 @@ type Reader struct {
 	remain  uint64
 	ctlHave uint8
 
+	deflate    bool // AllowDeflate: RSV1 on the first frame of a data message is permessage-deflate
+	compressed bool // the open message is compressed
+	rsv1       bool // the frame being read has RSV1 set
+
 	inMsg   bool   // a data message is open: the last data frame had FIN clear
 	msgOp   Opcode // opcode of the open message
 	started bool   // a KindData event of this message was emitted
@@ -100,6 +109,13 @@ func (r *Reader) Reset(lim *Limits) {
 // refused with 1002 as a status no client may send. Every other status keeps the rules of
 // ClientCloseCode, and an unprompted 1012 to 1014 is still refused.
 func (r *Reader) AllowEcho(code uint16) { r.echo = code }
+
+// AllowDeflate tells the Reader that permessage-deflate was negotiated (RFC 7692): RSV1 on the
+// first frame of a text or binary message marks the message compressed, which Event.Compressed
+// reports and whose UTF-8 the engine checks after inflating it. RSV1 anywhere else, on a
+// continuation or a control frame, and RSV2 or RSV3 always, are still refused with 1002. Call it
+// after Reset, before the first Feed.
+func (r *Reader) AllowDeflate() { r.deflate = true }
 
 func (r *Reader) fail(e *Error) (Event, bool) {
 	r.err = e
@@ -173,11 +189,12 @@ func (r *Reader) Feed(in []byte, now time.Time) (n int, ev Event) {
 // control frame that it is whole and short. It is what fails a bad frame before its length is read.
 func (r *Reader) firstTwo() *Error {
 	b0, b1 := r.hdr[0], r.hdr[1]
-	if b0&0x70 != 0 {
-		return r.setErr(ErrRSV)
-	}
 	r.fin = b0&0x80 != 0
 	r.op = Opcode(b0 & 0x0f)
+	if b0&0x30 != 0 || (b0&0x40 != 0 && (!r.deflate || (r.op != OpText && r.op != OpBinary))) {
+		return r.setErr(ErrRSV)
+	}
+	rsv1 := b0&0x40 != 0
 	switch r.op {
 	case OpContinuation, OpText, OpBinary, OpClose, OpPing, OpPong:
 	default:
@@ -201,6 +218,7 @@ func (r *Reader) firstTwo() *Error {
 	} else if r.inMsg {
 		return r.setErr(ErrInterleaved)
 	}
+	r.rsv1 = rsv1
 	need := uint8(2 + 4)
 	switch code {
 	case 126:
@@ -252,6 +270,7 @@ func (r *Reader) header() *Error {
 	}
 	// A data frame: count the fragment and judge the message size before reading any of it.
 	if r.op != OpContinuation {
+		r.compressed = r.rsv1
 		r.msgOp = r.op
 		r.msgLen = 0
 		r.frags = 0
@@ -271,7 +290,7 @@ func (r *Reader) header() *Error {
 
 // dataChunk handles bytes of a data frame's payload, already unmasked.
 func (r *Reader) dataChunk(chunk []byte) (Event, bool) {
-	if r.msgOp == OpText && !r.utf.write(chunk) {
+	if r.msgOp == OpText && !r.compressed && !r.utf.write(chunk) {
 		return r.fail(ErrTextUTF8)
 	}
 	r.msgLen += uint64(len(chunk))
@@ -280,7 +299,7 @@ func (r *Reader) dataChunk(chunk []byte) (Event, bool) {
 
 func (r *Reader) dataEvent(chunk []byte) (Event, bool) {
 	end := r.remain == 0 && r.fin
-	if end && r.msgOp == OpText && !r.utf.complete() {
+	if end && r.msgOp == OpText && !r.compressed && !r.utf.complete() {
 		return r.fail(ErrTextUTF8)
 	}
 	if r.remain == 0 {
@@ -289,7 +308,7 @@ func (r *Reader) dataEvent(chunk []byte) (Event, bool) {
 	if len(chunk) == 0 && !end {
 		return Event{}, false
 	}
-	ev := Event{Kind: KindData, Opcode: r.msgOp, Payload: chunk, Start: !r.started, End: end}
+	ev := Event{Kind: KindData, Opcode: r.msgOp, Payload: chunk, Start: !r.started, End: end, Compressed: r.compressed}
 	r.started = true
 	return ev, true
 }

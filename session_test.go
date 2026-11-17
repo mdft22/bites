@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -253,6 +254,7 @@ type memStore struct {
 	data    map[string][]byte
 	expires map[string]time.Time
 	deleted []string
+	touched []string          // ids Touch extended
 	owners  map[string]string // id to owner, for SaveOwned
 }
 
@@ -272,6 +274,17 @@ func (m *memStore) Save(_ context.Context, id string, data []byte, exp time.Time
 	defer m.mu.Unlock()
 	m.data[id], m.expires[id] = data, exp
 	return nil
+}
+
+func (m *memStore) Touch(ctx context.Context, id string, exp time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.data[id]; !ok || (!m.expires[id].IsZero() && !m.expires[id].After(bites.Now(ctx))) {
+		return false, nil
+	}
+	m.expires[id] = exp
+	m.touched = append(m.touched, id)
+	return true, nil
 }
 
 func (m *memStore) Delete(_ context.Context, id string) error {
@@ -612,9 +625,10 @@ func TestRevokingWhileRequestsSaveAtOnceIsSafeUnderRace(t *testing.T) {
 // plainStore is a SessionStore that keeps nothing and cannot keep owners.
 type plainStore struct{}
 
-func (plainStore) Load(context.Context, string) ([]byte, bool, error)    { return nil, false, nil }
-func (plainStore) Save(context.Context, string, []byte, time.Time) error { return nil }
-func (plainStore) Delete(context.Context, string) error                  { return nil }
+func (plainStore) Load(context.Context, string) ([]byte, bool, error)     { return nil, false, nil }
+func (plainStore) Save(context.Context, string, []byte, time.Time) error  { return nil }
+func (plainStore) Delete(context.Context, string) error                   { return nil }
+func (plainStore) Touch(context.Context, string, time.Time) (bool, error) { return false, nil }
 
 type ptrOwner struct{ ID string }
 
@@ -654,4 +668,96 @@ func (e expiringStore) DeleteOwner(ctx context.Context, owner, keep string) (int
 func TestTheMemoryStoreOfTheTestsKeepsTheContractOfEverySessionStore(t *testing.T) {
 	bitetest.TestSessionStore(t, func(*testing.T) bites.SessionStore { return expiringStore{newMemStore()} })
 	bitetest.TestOwnerSessionStore(t, func(*testing.T) bites.OwnerSessionStore { return expiringStore{newMemStore()} })
+}
+
+// revokeAfterLoad is a store whose Load, once armed, ends the owner's sessions right after it
+// answers: the moment a "sign out everywhere" lands between a request loading its session and
+// sliding it.
+type revokeAfterLoad struct {
+	*memStore
+	armed atomic.Bool
+}
+
+func (r *revokeAfterLoad) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	d, ok, err := r.memStore.Load(ctx, id)
+	if ok && r.armed.Swap(false) {
+		r.memStore.DeleteOwner(ctx, "ana", "")
+	}
+	return d, ok, err
+}
+
+func TestASlideThatRacesARevokeCreatesNothingAndLeavesTheSessionEnded(t *testing.T) {
+	st := &revokeAfterLoad{memStore: newMemStore()}
+	clk := bitetest.NewClock()
+	var logs logBuf
+	app := bites.New(bites.WithClock(clk), bites.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+	logins := bites.NewSessions[Login](bites.SessionOptions{Keys: [][]byte{key(1)}, Store: st, MaxAge: 2 * time.Hour, RefreshAfter: time.Hour})
+	app.Provide(logins.Load)
+	app.Post("/login/{user}", func(ctx context.Context, in struct {
+		S    bites.Session[Login]
+		Path struct{ User string }
+	}) (bites.NoContent, error) {
+		c, err := in.S.Renew(ctx, Login{UserID: in.Path.User})
+		return bites.NoContent{Cookies: []bites.Cookie{c}}, err
+	})
+	app.Get("/me", func(_ context.Context, in struct{ S bites.Session[Login] }) (string, error) { return in.S.Value.UserID, nil })
+	srv := bitetest.Start(t, app)
+	c := sessionCookie(t, srv.Do(bitetest.Request{Method: "POST", Target: "/login/ana"}))
+	clk.Advance(90 * time.Minute) // past RefreshAfter: the next request slides the session
+	st.armed.Store(true)
+	r := srv.Do(show2("/me", c))
+	if r.Status != 200 || r.Get("set-cookie") != "" {
+		t.Fatalf("a session that ended during the request was slid: %d, set-cookie %q", r.Status, r.Get("set-cookie"))
+	}
+	if ids := st.ids(); len(ids) != 0 {
+		t.Fatalf("the slide put a revoked session back in the store: %q", ids)
+	}
+	if got := whoAmI(srv, c); got != `` && got != "anonymous" {
+		// /me here answers the User of the session, empty for a new one.
+		t.Fatalf("the revoked cookie still opens: %q", got)
+	}
+	if !strings.Contains(logs.String(), "a session ended before it could be refreshed") {
+		t.Fatalf("the slide that found no session said nothing:\n%s", &logs)
+	}
+}
+
+func TestASlideOfAStoredSessionChangesOnlyItsExpiryNotTheDataAnotherRequestSaved(t *testing.T) {
+	st := newMemStore()
+	srv, clk := cartApp(t, bites.SessionOptions{Keys: [][]byte{key(1)}, MaxAge: 2 * time.Hour, RefreshAfter: time.Hour, Store: st})
+	c := sessionCookie(t, srv.Do(add("tea", "")))
+	clk.Advance(90 * time.Minute)
+	srv.Do(show(c))
+	if len(st.touched) != 1 || len(st.deleted) != 0 {
+		t.Fatalf("a slide touched %v and deleted %v, want one Touch", st.touched, st.deleted)
+	}
+}
+
+func TestStoreIDIsTheStoresIdForALoadedSessionAndEmptyForANewOneAndForCookieSessions(t *testing.T) {
+	st := newMemStore()
+	var gotStore, gotCookie string
+	srv, _ := cartApp(t, bites.SessionOptions{Keys: [][]byte{key(1)}, Store: st}, func(app *bites.App, _ *bites.Sessions[Cart]) {
+		app.Get("/sid", func(_ context.Context, in struct{ S bites.Session[Cart] }) (string, error) {
+			gotStore = in.S.StoreID()
+			return "ok", nil
+		})
+	})
+	if srv.Do(show2("/sid", "")); gotStore != "" {
+		t.Fatalf("a new session has the id %q", gotStore)
+	}
+	c := sessionCookie(t, srv.Do(add("tea", "")))
+	srv.Do(show2("/sid", c))
+	if ids := st.ids(); len(ids) != 1 || gotStore != ids[0] || len(gotStore) != 22 {
+		t.Fatalf("StoreID %q, the store holds %q", gotStore, ids)
+	}
+	plain, _ := cartApp(t, bites.SessionOptions{Keys: [][]byte{key(1)}}, func(app *bites.App, _ *bites.Sessions[Cart]) {
+		app.Get("/sid", func(_ context.Context, in struct{ S bites.Session[Cart] }) (string, error) {
+			gotCookie = "x" + in.S.StoreID()
+			return "ok", nil
+		})
+	})
+	pc := sessionCookie(t, plain.Do(add("tea", "")))
+	plain.Do(show2("/sid", pc))
+	if gotCookie != "x" {
+		t.Fatalf("a cookie session has the id %q", gotCookie)
+	}
 }

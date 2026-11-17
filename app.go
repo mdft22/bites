@@ -237,11 +237,22 @@ func WithTextFormat[T any](format string) Option {
 }
 
 // JSONSchema is the shape of a type that writes or reads its own JSON, declared once with
-// WithJSONSchema (ADR 0076). Type is "string", "number", "integer", "boolean", "object" or
-// "array", or "any" for a value that is free-form JSON and described as {}. Format is the
-// OpenAPI format of a string, number or integer. Nullable says the type's own methods can write
-// null, so the document allows it beside Type.
+// WithJSONSchema or, for a type of the app's own, by a JSONSchema method on the type (ADR 0076).
+// Type is "string", "number", "integer", "boolean", "object" or "array", or "any" for a value that
+// is free-form JSON and described as {}. Format is the OpenAPI format of a string, number or
+// integer. Nullable says the type's own methods can write null, so the document allows it beside
+// Type. Properties are the named members of an object, each a JSONProperty with its own schema, in
+// the order the document lists them; Open says an object with Properties may carry members beyond
+// them, which the document states as additionalProperties: true, and false states that the listed
+// members are all. Items is the schema of the elements of an array. Check returns what is wrong
+// with a schema, or nil: the same refusals New makes, for a program that builds a schema. The
+// type's own methods still decide what is valid: the schema states and does not enforce.
 type JSONSchema = wire.JSONSchema
+
+// JSONProperty is one named member of a JSONSchema of Type "object": Name is its name on the wire,
+// as the type's own methods write it, Schema is the shape of its value, and Required says a value
+// of the type always has it.
+type JSONProperty = wire.JSONProperty
 
 // WithJSONSchema registers the schema of a type that encodes or decodes itself through its own
 // JSON methods, such as pgx's pgtype.Timestamptz, which the codec delegates to and the API
@@ -252,7 +263,9 @@ type JSONSchema = wire.JSONSchema
 // would say {} and a generated client would say unknown. json.RawMessage and jsontext.Value
 // are free-form by name and need none; any other type that is free-form says so with
 // JSONSchema{Type: "any"}. Anything wrong is a panic from New naming the line that registered
-// the type.
+// the type. A type of the app's own states its schema by a method instead, func() JSONSchema named
+// JSONSchema, which is read once at Registration on a zero value; a type is described one way, so
+// a type with the method that is also registered here is refused.
 func WithJSONSchema[T any](s JSONSchema) Option {
 	where := callerWhere()
 	t := reflect.TypeFor[T]()
@@ -280,17 +293,19 @@ func checkJSONSchema(t reflect.Type, s JSONSchema, a *App) error {
 		return errors.New("the core already describes it as free-form JSON, which needs no registration")
 	case !jsoncodec.OwnJSON(t):
 		return errors.New(typeLabel(t) + " has no JSON method, so it is described by its fields and a registration would hide them: if it has a text form, use WithTextFormat")
-	case !slices.Contains(wire.JSONTypes, s.Type):
-		return errors.New("the type is " + strconv.Quote(s.Type) + ", which is not a JSON type: give one of " + strings.Join(wire.JSONTypes, ", "))
-	case s.Format != "" && s.Type != "string" && s.Type != "number" && s.Type != "integer":
-		return errors.New("a format belongs to a string, number or integer, and the type is " + strconv.Quote(s.Type))
-	case s.Type == "any" && s.Nullable:
-		return errors.New("a free-form value already admits null: drop Nullable")
+	}
+	if err := s.Check(); err != nil {
+		return err
+	}
+	if _, has, err := wire.DeclaredOf(t); err != nil {
+		return err
+	} else if has {
+		return errors.New("it states its schema through a JSONSchema method, and a type is described one way: drop the method, or this registration")
 	}
 	if _, ok := a.formats[t]; ok {
 		return errors.New("it is already registered with WithTextFormat, and a type is described one way")
 	}
-	if prev, ok := a.jsonSchemas[t]; ok && prev != s {
+	if prev, ok := a.jsonSchemas[t]; ok && !reflect.DeepEqual(prev, s) {
 		return errors.New("it is already registered with a different schema")
 	}
 	return nil
@@ -382,6 +397,8 @@ type App struct {
 	naming       NamingPolicy
 	formats      wire.Formats         // WithTextFormat (ADR 0042)
 	jsonSchemas  wire.JSONSchemas     // WithJSONSchema (ADR 0076)
+	decoders     []Decoder            // WithDecompression: the codings a request body may arrive in
+	wsDeflate    engine.WSDeflate     // WithWebSocketCompression: permessage-deflate, off when zero
 	memberPlans  sync.Map             // reflect.Type -> *memberPlan: how the members of a status error are written (ADR 0088)
 	statedErrors map[statedError]bool // the (status, type) pairs a route states with ErrorStatus[T]
 	testPlans    sync.Map             // reflect.Type -> *jsoncodec.Decoder: the plans bitetest reads answers with, nil for a type with none
@@ -788,6 +805,7 @@ func (a *App) start() *engine.Server {
 			ReassemblyBudget:  a.limits.ReassemblyBudget,
 			SendQueue:         a.limits.SendQueue,
 			SendBudget:        a.limits.SendBudget,
+			Deflate:           a.wsDeflate,
 		},
 	})
 	a.logSettings()

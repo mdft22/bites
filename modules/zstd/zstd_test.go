@@ -163,3 +163,26 @@ func TestATypedJSONAnswerOf4KiBCompressedWithZstdAllocatesTwice(t *testing.T) {
 		t.Errorf("allocs/request = %v, want exactly 2, as with gzip (ADR 0003, ADR 0061)", got)
 	}
 }
+
+func TestAZstdBodyIsDecodedByARouteThatOptsInAndTheDecodedSizeIsHeldToMaxBody(t *testing.T) {
+	app := bites.New(bites.WithClock(bitetest.NewClock()), bites.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	app.Post("/paste", func(_ context.Context, in struct{ Body struct{ Cells []string } }) (int, error) {
+		return len(in.Body.Cells), nil
+	}, bites.Decompress(zstd.Decoder()), bites.MaxBody(1024))
+	srv := bitetest.Start(t, app)
+	enc, _ := kzstd.NewWriter(nil)
+	send := func(body string) bitetest.Response {
+		return srv.Do(bitetest.Request{Method: "POST", Target: "/paste", Body: enc.EncodeAll([]byte(body), nil),
+			Header: map[string][]string{"Content-Type": {"application/json"}, "Content-Encoding": {"zstd"}}})
+	}
+	if r := send(`{"cells":["a","b"]}`); r.Status != 200 || r.Text() != "2" {
+		t.Fatalf("a zstd body: %d %s", r.Status, r.Text())
+	}
+	if r := send(`{"cells":["` + strings.Repeat("x", 5000) + `"]}`); r.Status != 413 {
+		t.Fatalf("a bomb: %d %s", r.Status, r.Text())
+	}
+	if r := srv.Do(bitetest.Request{Method: "POST", Target: "/paste", Body: []byte("not zstd"),
+		Header: map[string][]string{"Content-Type": {"application/json"}, "Content-Encoding": {"zstd"}}}); r.Status != 400 {
+		t.Fatalf("not zstd: %d %s", r.Status, r.Text())
+	}
+}

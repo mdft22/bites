@@ -1661,3 +1661,75 @@ func TestAnErrorStatusWithMembersIsAProblemAnswerWithTheFieldsOfItsTypeAddedInTh
 		t.Errorf("the other statuses are the shared Error: %s", jsonOf(rs))
 	}
 }
+
+// A type of the app's own that keeps every member a client sent states its schema by a method on
+// itself: named members the clients read, and the rest left open (ADR 0076).
+type (
+	node struct{ raw []byte }
+
+	nodeBody struct {
+		Head  node
+		Nodes []node
+		Opt   bites.Opt[node]
+	}
+
+	nodeNullable struct{ raw []byte }
+	nodeNullBody struct{ N nodeNullable }
+)
+
+func (n node) MarshalJSON() ([]byte, error) { return n.raw, nil }
+
+func (n *node) UnmarshalJSON(b []byte) error { n.raw = append(n.raw[:0], b...); return nil }
+
+func (node) JSONSchema() bites.JSONSchema {
+	return bites.JSONSchema{
+		Type: "object",
+		Open: true,
+		Properties: []bites.JSONProperty{
+			{Name: "id", Schema: bites.JSONSchema{Type: "string"}, Required: true},
+			{Name: "x", Schema: bites.JSONSchema{Type: "number"}},
+			{Name: "tags", Schema: bites.JSONSchema{Type: "array", Items: &bites.JSONSchema{Type: "string"}}},
+		},
+	}
+}
+
+func (n nodeNullable) MarshalJSON() ([]byte, error) { return n.raw, nil }
+
+func (n *nodeNullable) UnmarshalJSON(b []byte) error { n.raw = append(n.raw[:0], b...); return nil }
+
+func (*nodeNullable) JSONSchema() bites.JSONSchema {
+	return bites.JSONSchema{Type: "object", Nullable: true, Properties: []bites.JSONProperty{{Name: "id", Schema: bites.JSONSchema{Type: "string"}, Required: true}}}
+}
+
+func TestATypeThatStatesItsSchemaWithAMethodIsDescribedByItsNamedMembersAndLeftOpen(t *testing.T) {
+	doc := docOf(t, func(app *bites.App) {
+		app.Post("/nodes", func(context.Context, struct{ Body nodeBody }) (nodeBody, error) { return nodeBody{}, nil })
+		app.OpenAPI("/openapi.json", bites.Info{Title: "T", Version: "1"})
+	})
+	want := `{"additionalProperties":true,"properties":{"id":{"type":"string"},"tags":{"items":{"type":"string"},"type":"array"},"x":{"type":"number"}},"required":["id"],"type":"object"}`
+	for _, comp := range []string{"nodeBody.Request", "nodeBody.Response"} {
+		props := dig(doc, "components", "schemas", comp, "properties")
+		if props == nil {
+			t.Fatalf("no component %s in %s", comp, jsonOf(dig(doc, "components", "schemas")))
+		}
+		if got := jsonOf(dig(props, "head")); got != want {
+			t.Errorf("%s.head: %s\nwant %s", comp, got, want)
+		}
+		if got := jsonOf(dig(props, "nodes")); got != `{"items":`+want+`,"type":"array"}` {
+			t.Errorf("%s.nodes: %s", comp, got)
+		}
+	}
+}
+
+func TestAMethodSchemaThatIsNullableAddsNullToAResponseOnlyAndAMemberOfItIsStatedClosed(t *testing.T) {
+	doc := docOf(t, func(app *bites.App) {
+		app.Post("/n", func(context.Context, struct{ Body nodeNullBody }) (nodeNullBody, error) { return nodeNullBody{}, nil })
+		app.OpenAPI("/openapi.json", bites.Info{Title: "T", Version: "1"})
+	})
+	if got := jsonOf(dig(doc, "components", "schemas", "nodeNullBody.Request", "properties", "n")); got != `{"additionalProperties":false,"properties":{"id":{"type":"string"}},"required":["id"],"type":"object"}` {
+		t.Errorf("request: %s", got)
+	}
+	if got := jsonOf(dig(doc, "components", "schemas", "nodeNullBody.Response", "properties", "n")); !strings.Contains(got, `"type":["object","null"]`) {
+		t.Errorf("response: %s", got)
+	}
+}

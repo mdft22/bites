@@ -20,6 +20,14 @@ func Encoder() bites.Encoder
 
 Encoder is the brotli [`Encoder`](./app.md#encoder) for [`Compression`](./app.md#compression): level 1 of the matchfinder writer, one whole stream per answer. Its coding is `br`. Its writers are pooled and never reach user code ([ADR 0008](../adr/0008-no-pooled-object-reaches-the-user.md)), and a pooled writer keeps no reference to the caller's buffer; about GOMAXPROCS of them are live at once, and the garbage collector drops the ones left idle. Every call returns the same Encoder, so every app in the process shares one pool.
 
+### `brotli.Decoder`
+
+```go
+func Decoder() bites.Decoder
+```
+
+Decoder is the brotli [`Decoder`](./app.md#decoder) for [`Decompress`](./input.md#decompress) and [`WithDecompression`](./app.md#withdecompression): it decodes a request body sent with `Content-Encoding: br`, stopping at the route's `MaxBody` of decoded bytes (a body that would be more is a 413); a stream that is not brotli is a 400.
+
 ### `brotli.Level`
 
 ```go

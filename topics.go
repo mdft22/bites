@@ -145,6 +145,42 @@ func (ts *Topics[Out]) subscribe(key string, s *Socket[Out], skip func(Out) bool
 	return nil
 }
 
+// Listen calls fn with every message the Topic of key delivers, until the stop it returns is
+// called, as Topic.Listen does for one Topic: on a Topics made with NewTopics, every message the
+// broker delivers from any instance, this one's included, after Resolve has expanded it; on a zero
+// Topics, every message published in this process. It is how the server's own code hears one key
+// of a family without a Socket, as a cache that drops its entry per key, or a test of what a
+// family delivers after Resolve. The Topic of key is made while fn listens, so a key held only by
+// functions is held in memory like one with a Socket, and it is dropped when its last Socket and
+// function have left.
+//
+// fn runs on the goroutine that delivers and must not block, and a panic in it is recovered and
+// logged, both as for Topic.Listen. stop may be called more than once and from any goroutine, fn
+// included. Listen returns an error, and listens to nothing, for an empty key and for one the
+// broker does not carry, as Subscribe does, and panics when fn is nil.
+func (ts *Topics[Out]) Listen(key string, fn func(Out)) (stop func(), err error) {
+	if fn == nil {
+		panic("bites: Topics.Listen: fn is nil: give the function that receives each message of the key")
+	}
+	if err := ts.check(key); err != nil {
+		return nil, err
+	}
+	ts.mu.Lock()
+	e := ts.m[key]
+	if e == nil {
+		e = ts.entry(key)
+	}
+	e.pending++
+	ts.mu.Unlock()
+	// Outside the family's lock, as in subscribe: stopping a listener takes it to drop the Topic.
+	stopOne := e.t.Listen(fn)
+	ts.mu.Lock()
+	e.pending--
+	ts.dropIfEmpty(key, e)
+	ts.mu.Unlock()
+	return stopOne, nil
+}
+
 // entry makes the Topic of key; the caller holds ts.mu.
 func (ts *Topics[Out]) entry(key string) *topicEntry[Out] {
 	var t *Topic[Out]

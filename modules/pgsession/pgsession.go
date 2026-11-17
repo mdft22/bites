@@ -85,7 +85,7 @@ type Store struct {
 	cancel context.CancelFunc
 }
 
-type queries struct{ load, save, del, delOwner, sweep, schema string }
+type queries struct{ load, save, touch, del, delOwner, sweep, schema string }
 
 // New returns a Store; it connects nothing and creates nothing. It panics, naming the line that
 // called it, when Pool is nil, Table is not a plain identifier of at most 50 bytes, or SweepEvery
@@ -119,6 +119,7 @@ func New(o Options) *Store {
 	s.q = queries{
 		load:     `SELECT data FROM ` + t + ` WHERE id_hash = $1 AND expires > $2`,
 		save:     `INSERT INTO ` + t + ` (id_hash, owner, data, expires) VALUES ($1, NULLIF($2, ''), $3, $4) ON CONFLICT (id_hash) DO UPDATE SET owner = EXCLUDED.owner, data = EXCLUDED.data, expires = EXCLUDED.expires`,
+		touch:    `UPDATE ` + t + ` SET expires = $3 WHERE id_hash = $1 AND expires > $2`,
 		del:      `DELETE FROM ` + t + ` WHERE id_hash = $1`,
 		delOwner: `DELETE FROM ` + t + ` WHERE owner = $1 AND id_hash <> $2`,
 		sweep:    fmt.Sprintf(`DELETE FROM %[1]s WHERE id_hash IN (SELECT id_hash FROM %[1]s WHERE expires <= $1 LIMIT %d FOR UPDATE SKIP LOCKED)`, t, sweepBatch),
@@ -225,6 +226,19 @@ func (s *Store) SaveOwned(ctx context.Context, id, owner string, data []byte, ex
 		return fmt.Errorf("pgsession: save: %w", err)
 	}
 	return nil
+}
+
+// Touch moves the expiry of id to expires and changes nothing else, owner and data included. It is
+// an UPDATE of the live row, never an insert, so a session that was deleted, swept or has expired on
+// the application's clock stays gone and Touch returns false; the framework calls it to slide a
+// session, so a slide that races Sessions.RevokeOwner cannot bring the session back. It runs in the
+// transaction of WithTx when ctx carries one.
+func (s *Store) Touch(ctx context.Context, id string, expires time.Time) (bool, error) {
+	tag, err := s.db(ctx).Exec(ctx, s.q.touch, hash(id), bites.Now(ctx), expires)
+	if err != nil {
+		return false, fmt.Errorf("pgsession: touch: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // Delete forgets id. Deleting an id that has nothing is not an error.
