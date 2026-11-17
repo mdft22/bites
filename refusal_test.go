@@ -2175,6 +2175,56 @@ func TestEveryMistakeIsRefusedAtRegistrationWithTheMessageWrittenForIt(t *testin
 			bites.NewRateLimiter(at(bites.RateLimitOptions{Limit: 2_000_000_000, Period: time.Second}))
 		},
 			"NewRateLimiter: Limit 2000000000 in a Period of 1s is more than one request a nanosecond", false},
+		{"NewIdempotency with a header that is not a token is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{Header: "Idem key"}))
+		},
+			`NewIdempotency: Header "Idem key" is not an HTTP header name: give a token such as "Idempotency-Key"`, false},
+		{"NewIdempotency with a negative MaxKeyLength is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{MaxKeyLength: -1}))
+		},
+			"NewIdempotency: MaxKeyLength is -1: give zero for 255, or a length from 1 to 1024", false},
+		{"NewIdempotency with a MaxKeyLength over 1024 is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{MaxKeyLength: 2000}))
+		},
+			"NewIdempotency: MaxKeyLength is 2000: give zero for 255, or a length from 1 to 1024", false},
+		{"NewIdempotency with a TTL under a second is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{TTL: 500 * time.Millisecond}))
+		},
+			"NewIdempotency: TTL is 500ms: give zero for 24 hours, or how long an answer is kept, at least a second", false},
+		{"NewIdempotency with an InFlight over the TTL is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{TTL: time.Hour, InFlight: 2 * time.Hour}))
+		},
+			"NewIdempotency: InFlight is 2h0m0s: give zero for a minute, or how long a claim holds while the handler runs, from a second to the TTL of 1h0m0s", false},
+		{"NewIdempotency with a negative MaxAnswer is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{MaxAnswer: -1}))
+		},
+			"NewIdempotency: MaxAnswer is -1, which is not a size: give zero for 64 KiB, or the largest answer body kept in bytes", false},
+		{"NewIdempotency with a negative MaxKeys is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{MaxKeys: -1}))
+		},
+			"NewIdempotency: MaxKeys is -1, which is not a bound: give zero for 10,000, or a positive number", false},
+		{"NewIdempotency with a negative MaxBytes is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{MaxBytes: -1}))
+		},
+			"NewIdempotency: MaxBytes is -1, which is not a bound: give zero for 16 MiB, or a positive number of bytes", false},
+		{"NewIdempotency with MaxKeys and a Store is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{MaxKeys: 10, Store: failingIdempotencyStore{}}))
+		},
+			"NewIdempotency: MaxKeys or MaxBytes is given with a Store: they bound the in-memory store, which a Store replaces, so bound the Store's own memory instead", false},
+		{"NewIdempotency with a MaxBytes under twice MaxAnswer is refused at construction", func(*bites.App) {
+			bites.NewIdempotency(at(bites.IdempotencyOptions{MaxAnswer: 100, MaxBytes: 150}))
+		},
+			"NewIdempotency: MaxBytes is 150, under twice MaxAnswer of 100: the store must hold at least two of the largest answers, so give a larger MaxBytes or a smaller MaxAnswer", false},
+		{"Idempotency given to the app is refused", func(a *bites.App) { here(); a.Use(bites.NewIdempotency(bites.IdempotencyOptions{}).Middleware()) },
+			"app: Use: middleware 1 is Idempotency, which keeps an answer for each route and reads the body with the route's limits, so on the app it has no route to do either: give it to a group or a route with Use", false},
+		{"Idempotency on a route that returns a stream is refused", func(a *bites.App) {
+			here(); a.Post("/x", streamOut, bites.Use(bites.NewIdempotency(bites.IdempotencyOptions{}).Middleware()))
+		},
+			"POST /x: Idempotency is on a route that returns a File or a stream, whose body is written after the middleware has returned, so there is no answer to keep: take Idempotency off this route, or return the answer whole", false},
+		{"Idempotency on a route that reads an Upload is refused", func(a *bites.App) {
+			here(); a.Post("/x", ok[struct{ Body bites.Upload }], bites.MaxBody(1<<20), bites.Use(bites.NewIdempotency(bites.IdempotencyOptions{}).Middleware()))
+		},
+			"POST /x: Idempotency is on a route whose body is an Upload, a multipart form or a BodyReader, which is read part by part and cannot be compared whole: take Idempotency off this route, or have the client create the resource with a JSON request and send the file to it", false},
 		{"CSRF with no origin on an app with no list is refused when the app gets it", func(a *bites.App) { here(); a.Use(bites.CSRF(bites.CSRFOptions{})) },
 			`app: Use: CSRF: Origins is empty and the app has no list to take them from: list the full origins of the pages that send forms and scripts to this app ("https://app.example.com"), its own included, in CSRFOptions.Origins, or once for the app, WebSocket routes too, with WithAllowOrigins`, false},
 		{"CSRF with no origin on a route of an app with no list is refused at the route", func(a *bites.App) { here(); a.Post("/x", ok[Empty], bites.Use(bites.CSRF(bites.CSRFOptions{}))) },

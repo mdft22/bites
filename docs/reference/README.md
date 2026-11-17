@@ -12,6 +12,7 @@ Every exported name of `bites`, `bitetest` and `stdhttp`, one heading each, with
 | [Errors](./errors.md) | `StatusError` and its constructors, `Invalid` and `FieldError`, `ErrClientGone` and `Cause`, and the problem+json shape |
 | [Middleware](./middleware.md) | `Middleware`, `Request`, `Response`, `Next`, `Use`, `CORS`, `RequestID` and `Timeout` |
 | [Observability](./observability.md) | `Observer`, `Outcome`, `WithObserver`, `AccessLog`, `Metrics` and `ServeMetrics`, `Trace` and `WithTraceContext`, `WithHealth`, `WithShutdownDelay` and `SetReady` |
+| [Idempotency](./idempotency.md) | `Idempotency` and `NewIdempotency`, `IdempotencyOptions`, the `IdempotencyStore` interface and the types it passes |
 | [Providers](./providers.md) | `Provide` and `Override` on the app, a group and a route |
 | [Security](./security.md) | `SecurityHeaders`, `BearerAuth`, `BasicAuth`, `APIKeyAuth`, `RateLimiter`, `Session` and `Sessions`, `CSRF` |
 | [WebSockets](./websocket.md) | `WebSocket` routes, `Socket`, `Inbox`, `Topic`, `NewTopic`, `Broker`, close information, and the origin and message limits |
@@ -208,6 +209,7 @@ A heading is the exported name itself, so the anchor of `App.Get` is `app.md#app
 - [`bitetest.Broker.Subscribe`](./bitetest.md#bitetestbrokersubscribe)
 - [Conformance suites](./bitetest.md#conformance-suites)
 - [`bitetest.TestRateLimitStore`](./bitetest.md#bitetesttestratelimitstore)
+- [`bitetest.TestIdempotencyStore`](./bitetest.md#bitetesttestidempotencystore)
 - [`bitetest.TestSessionStore`](./bitetest.md#bitetesttestsessionstore)
 - [`bitetest.TestOwnerSessionStore`](./bitetest.md#bitetesttestownersessionstore)
 - [`bitetest.OwnerSessionSuite`](./bitetest.md#bitetestownersessionsuite)
@@ -263,6 +265,19 @@ A heading is the exported name itself, so the anchor of `App.Get` is `app.md#app
 - [Cancellation](./errors.md#cancellation)
 - [`ErrClientGone`](./errors.md#errclientgone)
 - [`Cause`](./errors.md#cause)
+- [`NewIdempotency`](./idempotency.md#newidempotency)
+- [`Idempotency`](./idempotency.md#idempotency)
+- [`Idempotency.Middleware`](./idempotency.md#idempotencymiddleware)
+- [`IdempotencyOptions`](./idempotency.md#idempotencyoptions)
+- [`IdempotencyStore`](./idempotency.md#idempotencystore)
+- [`IdempotencyState`](./idempotency.md#idempotencystate)
+- [`IdempotencyClaimed`](./idempotency.md#idempotencyclaimed)
+- [`IdempotencyRunning`](./idempotency.md#idempotencyrunning)
+- [`IdempotencyDone`](./idempotency.md#idempotencydone)
+- [`IdempotencyEntry`](./idempotency.md#idempotencyentry)
+- [`IdempotencyAnswer`](./idempotency.md#idempotencyanswer)
+- [`IdempotencyHeader`](./idempotency.md#idempotencyheader)
+- [`ErrIdempotencyStoreFull`](./idempotency.md#erridempotencystorefull)
 - [The Sections](./input.md#the-sections)
 - [`CSV`](./input.md#csv)
 - [Presence](./input.md#presence)

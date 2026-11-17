@@ -23,15 +23,16 @@ For the pieces together in one program, [`examples/chat`](../../examples/chat/RE
 11. [Streaming and SSE](./streaming.md): responses written over time, and Server-Sent Events.
 12. [Middleware](./middleware.md): writing a middleware, where it runs and what it can see.
 13. [CORS, request IDs, access logs and timeouts](./first-party-middleware.md): the three middleware the framework ships, and its access log.
-14. [Providers](./providers.md): filling Input fields from the request, such as the signed-in user, and replacing them in a test.
-15. [Security](./security.md): security headers, authenticating with Bearer tokens, Basic auth and API keys, rate limiting, sessions and CSRF.
-16. [WebSockets](./websockets.md): typed WebSocket routes, sending, topics and closing.
-17. [The OpenAPI document](./openapi.md): serving the API description the types already carry, and enriching it.
-18. [Limits and timeouts](./limits.md): the limits that are on by default, and how to change them for the app, a group or a route.
-19. [Deploying](./deploying.md): listening, TLS, graceful shutdown, health and readiness, gzip and running behind a proxy.
-20. [Observability](./observability.md): Observers, the access log, Prometheus metrics and following a request across services.
-21. [Testing](./testing.md): testing an app over memory with `bitetest`, with a clock you move yourself and a WebSocket client.
-22. [Mounting an http.Handler](./mounting-net-http.md): serving pprof, a file server or any `net/http` handler on a route, as a slow path.
-23. [The API documentation UI](./api-docs-ui.md): Swagger UI or Scalar for your OpenAPI document, from the `docsui` module.
-24. [Writing descriptions as doc comments](./doc-comments.md): generating the `Descriptions` methods from the comments of your fields.
-25. [Building the documentation site](./documentation-site.md): rendering these pages to static HTML.
+14. [Idempotency keys](./idempotency.md): answering a write sent again with the same key with the first answer, so a payment is made once.
+15. [Providers](./providers.md): filling Input fields from the request, such as the signed-in user, and replacing them in a test.
+16. [Security](./security.md): security headers, authenticating with Bearer tokens, Basic auth and API keys, rate limiting, sessions and CSRF.
+17. [WebSockets](./websockets.md): typed WebSocket routes, sending, topics and closing.
+18. [The OpenAPI document](./openapi.md): serving the API description the types already carry, and enriching it.
+19. [Limits and timeouts](./limits.md): the limits that are on by default, and how to change them for the app, a group or a route.
+20. [Deploying](./deploying.md): listening, TLS, graceful shutdown, health and readiness, gzip and running behind a proxy.
+21. [Observability](./observability.md): Observers, the access log, Prometheus metrics and following a request across services.
+22. [Testing](./testing.md): testing an app over memory with `bitetest`, with a clock you move yourself and a WebSocket client.
+23. [Mounting an http.Handler](./mounting-net-http.md): serving pprof, a file server or any `net/http` handler on a route, as a slow path.
+24. [The API documentation UI](./api-docs-ui.md): Swagger UI or Scalar for your OpenAPI document, from the `docsui` module.
+25. [Writing descriptions as doc comments](./doc-comments.md): generating the `Descriptions` methods from the comments of your fields.
+26. [Building the documentation site](./documentation-site.md): rendering these pages to static HTML.

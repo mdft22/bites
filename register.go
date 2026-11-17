@@ -689,6 +689,10 @@ func register[In, Out any](a *App, prefix, method, pattern string, h func(contex
 		tr.validate = m.Func.Interface().(func(In) error)
 	}
 	rt.serve = tr.serve
+	rt.maxBody, rt.bodyTimeout = cfg.maxBody, cfg.bodyTimeout
+	if err := checkIdempotency(cfg.mw, in, out); err != nil {
+		fail(err)
+	}
 	if err := a.bindMiddleware(cfg.mw); err != nil {
 		fail(err)
 	}

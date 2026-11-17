@@ -72,6 +72,7 @@ In the order the guide teaches them. Each row is one guide page and the referenc
 |---|---|---|
 | [Middleware](./guide/middleware.md) | [Middleware](./reference/middleware.md) | [Middleware and Providers](./design/middleware-and-providers.md) |
 | [CORS, request IDs, access logs and timeouts](./guide/first-party-middleware.md) | [First-party middleware](./reference/middleware.md), [`AccessLog`](./reference/observability.md#accesslog) | [Middleware and Providers](./design/middleware-and-providers.md), [Observability](./design/observability.md) |
+| [Idempotency keys](./guide/idempotency.md) | [Idempotency](./reference/idempotency.md) | [Middleware and Providers](./design/middleware-and-providers.md) |
 | [Providers](./guide/providers.md) | [Providers](./reference/providers.md) | [Middleware and Providers](./design/middleware-and-providers.md) |
 | [Security](./guide/security.md) | [Security](./reference/security.md), [`jwt`](./reference/jwt.md), [`pgsession`](./reference/pgsession.md), [`pgratelimit`](./reference/pgratelimit.md) | [Security](./design/security.md) |
 

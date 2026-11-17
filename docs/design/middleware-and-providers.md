@@ -41,6 +41,8 @@ The Response is returned by value and its body stays opaque, so a middleware can
 
 10. **Everything else a production framework needs is scheduled, not left waiting to be asked for.** Rate limiting, CSRF, security headers, sessions, auth Providers and conditional requests are milestone 3, each built whole because a security middleware done halfway is worse than none; the security ones are built and have a page of their own, [security](security.md). [ADR 0032](../adr/0032-four-first-party-middleware.md)
 
+11. **A write sent again with the same `Idempotency-Key` is answered with the first answer.** `NewIdempotency(...).Middleware()` goes on a route or a group, never the app. A `POST` or `PATCH` with a key is claimed in an `IdempotencyStore` before it runs and its 2xx or 3xx answer is kept; the same key with the same method, path, query and body is answered with it and `Idempotent-Replayed: true`, with another request 422, while the first runs 409 with `Retry-After`; a 4xx, a 5xx, a panic and a stream are never kept, and an answer over `MaxAnswer` is kept only as the fact that the work was done. A key belongs to the credentials that sent it, or to what `Scope` returns. The in-memory store is per instance and bounded in keys and bytes, dropping answers oldest first and never a claim; a shared store is held to its interface by `bitetest.TestIdempotencyStore`. [ADR 0090](../adr/0090-a-write-sent-again-with-the-same-idempotency-key-is-answered-with-the-first-answer.md)
+
 ## Decisions
 
 | ADR | What it decides |
@@ -48,6 +50,7 @@ The Response is returned by value and its body stays opaque, so a middleware can
 | [0022](../adr/0022-middleware-sees-a-request-view-and-returns-a-response-value.md) | middleware takes a request view and returns a response value; `Next` is a struct |
 | [0023](../adr/0023-provided-sections-are-checked-at-registration.md) | Providers fill Input fields, are checked at Registration, and `Override` is explicit |
 | [0032](../adr/0032-four-first-party-middleware.md) | `CORS`, `RequestID`, `AccessLog` and `Timeout`, and the rest scheduled |
+| [0090](../adr/0090-a-write-sent-again-with-the-same-idempotency-key-is-answered-with-the-first-answer.md) | `Idempotency`: a write sent again with the same key is answered with the first answer, from a bounded store an application can replace |
 
 ## Open questions
 
@@ -55,6 +58,7 @@ The Response is returned by value and its body stays opaque, so a middleware can
 - **`Request.Header` is a scan**, quickest for one or two lookups; an index wins from four, and the choice waits for the count real middleware makes ([ADR 0022](../adr/0022-middleware-sees-a-request-view-and-returns-a-response-value.md)).
 - **A faster access record** would bypass the app's logger and its handler, which is left open ([ADR 0032](../adr/0032-four-first-party-middleware.md)).
 - **What registration cannot catch:** a `Timeout` on a route that returns a Stream, `CORS` placed before `RequestID`, and an origin list that does not match what the browser sends ([ADR 0032](../adr/0032-four-first-party-middleware.md)).
+- **What registration cannot catch for `Idempotency`:** one wrapped in the application's own middleware (not recognised, so its route is not checked), a `Scope` that gives every client one value, a handler that does part of its work and then answers a 4xx (the retry runs it again), and an in-memory store behind several instances, where a retry that lands on another one runs the handler again ([ADR 0090](../adr/0090-a-write-sent-again-with-the-same-idempotency-key-is-answered-with-the-first-answer.md)).
 - **A generated request id is not a trace id**; the trace id is [ADR 0059](../adr/0059-the-core-carries-w3c-trace-context-and-records-no-span.md)'s ([ADR 0032](../adr/0032-four-first-party-middleware.md)).
 - **Sixteen Providers a route** is a constant chosen without a workload that needs more, and the stack device depends on the runtime moving pointers between frames, which a future runtime could change ([ADR 0023](../adr/0023-provided-sections-are-checked-at-registration.md)).
 - **A panic skips the CORS headers**, since the chain does not return; the access record, written by an Observer, is not skipped ([ADR 0032](../adr/0032-four-first-party-middleware.md)).

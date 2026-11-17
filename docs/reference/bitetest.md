@@ -723,6 +723,14 @@ func TestRateLimitStore(t *testing.T, newStore func(t *testing.T) bites.RateLimi
 
 TestRateLimitStore checks a [`bites.RateLimitStore`](./security.md#ratelimitstore): a bucket of `burst` requests that earns one back every `interval`, `Remaining`, `RetryAfter` and `Reset` as the interface defines them, a refused request that spends nothing, a `now` earlier than one already seen that gives nothing back, keys that never share a bucket (the empty key, emails, invalid UTF-8 and a NUL byte included), and `Take` atomic for a key under concurrent callers (60 rounds of 8 callers on a burst of 1, 40 callers on a burst of 5, and 12 keys at once). The suite gives `Take` its own times and moves them, never sleeping, so a store must decide with the `now` it is given. Durations are compared to within a millisecond.
 
+### `bitetest.TestIdempotencyStore`
+
+```go
+func TestIdempotencyStore(t *testing.T, newStore func(t *testing.T) bites.IdempotencyStore)
+```
+
+TestIdempotencyStore checks a [`bites.IdempotencyStore`](./idempotency.md#idempotencystore): `Claim` of a free key is claimed, of a key another request holds is running with that request's fingerprint and takes nothing, and of a key whose claim lapsed after `inFlight` is claimed again; a kept answer comes back as done with the first request's fingerprint, equal field for field and with its headers in order, until its `ttl` passes; an answer that was too large is kept as that fact; `Complete` keeps the answer of a request whose claim lapsed or was never made; `Release` frees a claim and leaves an answer alone, and of an unknown key is not an error; keys never share an entry; and of eight callers of one key at once exactly one is claimed, in each of 60 rounds. The suite gives every call its own times and moves them, never sleeping, so a store must decide with the `now` it is given.
+
 ### `bitetest.TestSessionStore`
 
 ```go

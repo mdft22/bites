@@ -593,6 +593,9 @@ type route struct {
 	room    int                             // the slab room its middleware write into (slabRoom), when no app middleware runs
 	pattern string                          // the path pattern with its group's prefix, for Outcome.Route (ADR 0051)
 	origins *[len(stdMethods)]reqctx.Origin // the pattern with each standard method, what a request's Ctx points at (newRoute)
+
+	maxBody     int64         // the body limit and the time to read it, which Idempotency reads the body with (ADR 0090)
+	bodyTimeout time.Duration //
 }
 
 // newRoute returns a route of pattern with its origins made.
@@ -717,6 +720,9 @@ func (a *App) Use(mw ...Middleware) {
 	for i, m := range mw {
 		if m == nil {
 			panic(&RegistrationError{msg: fmt.Sprintf("app: Use: middleware %d is nil\n\tregistered at %s", i+1, where)})
+		}
+		if sameCode(m, (*Idempotency)(nil).serve) {
+			panic(&RegistrationError{msg: "app: Use: middleware " + strconv.Itoa(i+1) + " is Idempotency, which keeps an answer for each route and reads the body with the route's limits, so on the app it has no route to do either: give it to a group or a route with Use\n\tregistered at " + where})
 		}
 	}
 	a.mu.Lock()

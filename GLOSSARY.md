@@ -377,7 +377,7 @@ What carries a Topic's messages between the instances of an application ([ADR 00
 _Avoid_: bus, pubsub, message queue, hub
 
 **Conformance suite**:
-A function of `bitetest` (`TestRateLimitStore`, `TestSessionStore`, `TestOwnerSessionStore`, `TestBroker`) that a store's or a Broker's own test calls to hold it to the promises of its interface's doc comment, one subtest each ([ADR 0086](docs/adr/0086-a-store-is-held-to-its-interface-by-a-conformance-suite-in-bitetest.md)).
+A function of `bitetest` (`TestRateLimitStore`, `TestSessionStore`, `TestOwnerSessionStore`, `TestIdempotencyStore`, `TestBroker`) that a store's or a Broker's own test calls to hold it to the promises of its interface's doc comment, one subtest each ([ADR 0086](docs/adr/0086-a-store-is-held-to-its-interface-by-a-conformance-suite-in-bitetest.md)).
 _Avoid_: contract test, compliance test, TCK
 
 **Gap**:
@@ -457,6 +457,14 @@ _Avoid_: anonymous auth, soft auth, guest mode
 **Rate limiter**:
 `RateLimiter`: a token bucket per key (the client address by default, or a user's id through `Allow` in a Provider), held in a bounded in-memory store or a shared one, which for Postgres is the module `pgratelimit` ([ADR 0055](docs/adr/0055-rate-limiting-is-a-token-bucket-per-key-with-a-bounded-store.md), [ADR 0085](docs/adr/0085-a-postgres-rate-limit-store-is-a-module.md)).
 _Avoid_: throttle, quota manager
+
+**Idempotency key**:
+The value of the `Idempotency-Key` header with which a client marks a write it may send again (a retry after a timeout, a redelivered webhook); an `Idempotency` claims it in an `IdempotencyStore` before the handler runs, keeps the answer of a request that did its work, and answers the same request sent again with that answer and `Idempotent-Replayed: true`. A key belongs to the credentials that sent it, or to what `IdempotencyOptions.Scope` returns, and to one route ([ADR 0090](docs/adr/0090-a-write-sent-again-with-the-same-idempotency-key-is-answered-with-the-first-answer.md)).
+_Avoid_: request id, dedupe key, replay token, nonce
+
+**Claim**:
+What an `IdempotencyStore` records for a key while a request runs: the key is held until `InFlight` passes, a duplicate that arrives meanwhile is answered 409, and the claim is completed with the answer or released when the request did not do its work. Not a lock the handler holds ([ADR 0090](docs/adr/0090-a-write-sent-again-with-the-same-idempotency-key-is-answered-with-the-first-answer.md)).
+_Avoid_: lock, lease, reservation
 
 **Trusted proxy**:
 A load balancer or proxy whose network the app lists with `WithTrustedProxies`, by CIDR; only a connection from one may name the client's address or scheme in a forwarding header, and the public host and prefix when the app says its proxies write them ([ADR 0025](docs/adr/0025-no-proxy-is-trusted-by-default.md)). No proxy is trusted by default.
