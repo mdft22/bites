@@ -42,7 +42,7 @@
 - **`DeleteOwner(ctx, owner, keep)` keeps the row of `keep`**: one statement, `DELETE ... WHERE owner = $1 AND id_hash <> $2`, with `keep` hashed like every id. An empty `keep` hashes to the SHA-256 of the empty string, which no id has, so it keeps none (`TestDeleteOwnerKeepsTheSessionItIsToldToKeep`).
 - **`DeleteOwner` deletes expired but unswept rows too** and counts them, so the count can include a session that had already ended. It is a count of rows forgotten, which is what [ADR 0056](0056-a-session-is-sealed-in-a-cookie-and-changed-by-returning-its-cookie.md) says.
 - **The schema is not migrated.** A later version of the module that changes the table needs a migration the application runs; `Schema` shows what the version expects and nothing compares it with what exists.
-- **It serves Postgres only.** MySQL and SQLite stores, and Redis, fit the same interface and are modules when an application asks.
+- **It serves Postgres only.** MySQL and SQLite stores fit the same interface and are modules when an application asks; the Redis and Valkey one is the module `redissession` ([ADR 0093](0093-redis-and-valkey-stores-are-two-modules-and-every-change-is-one-lua-script.md)).
 
 **Considered and what was rejected.**
 

@@ -21,6 +21,8 @@ Every exported name of `bites`, `bitetest` and `stdhttp`, one heading each, with
 | [pgnotify](./pgnotify.md) | the module that carries a Topic between instances over Postgres `LISTEN`/`NOTIFY` |
 | [pgsession](./pgsession.md) | the module that keeps sessions in Postgres as an `OwnerSessionStore`, revocable by owner |
 | [pgratelimit](./pgratelimit.md) | the module that keeps the buckets of a `RateLimiter` in Postgres as a `RateLimitStore`, so a limit holds across instances |
+| [redissession](./redissession.md) | the module that keeps sessions in Redis or Valkey as an `OwnerSessionStore`, revocable by owner |
+| [redisratelimit](./redisratelimit.md) | the module that keeps the buckets of a `RateLimiter` in Redis or Valkey as a `RateLimitStore`, so a limit holds across instances |
 | [stdhttp](./stdhttp.md) | `Mount`, `MountGroup`, `MountMethods` and `Methods`, for serving a plain `http.Handler` |
 | [docsui](./docsui.md) | the module that serves Swagger UI or Scalar for the OpenAPI document |
 | [jwt](./jwt.md) | the module that verifies HS256, RS256 and ES256 tokens for `BearerAuth`, with fixed keys or a JWKS |
@@ -555,6 +557,21 @@ A heading is the exported name itself, so the anchor of `App.Get` is `app.md#app
 - [`App.Provide`](./providers.md#appprovide)
 - [`Group.Provide`](./providers.md#groupprovide)
 - [`Group.Override`](./providers.md#groupoverride)
+- [`redisratelimit.New`](./redisratelimit.md#redisratelimitnew)
+- [`redisratelimit.Options`](./redisratelimit.md#redisratelimitoptions)
+- [`redisratelimit.DefaultPrefix`](./redisratelimit.md#redisratelimitdefaultprefix)
+- [`redisratelimit.Store`](./redisratelimit.md#redisratelimitstore)
+- [`redisratelimit.Store.Take`](./redisratelimit.md#redisratelimitstoretake)
+- [`redissession.New`](./redissession.md#redissessionnew)
+- [`redissession.Options`](./redissession.md#redissessionoptions)
+- [`redissession.DefaultPrefix`](./redissession.md#redissessiondefaultprefix)
+- [`redissession.Store`](./redissession.md#redissessionstore)
+- [`redissession.Store.Load`](./redissession.md#redissessionstoreload)
+- [`redissession.Store.Save`](./redissession.md#redissessionstoresave)
+- [`redissession.Store.SaveOwned`](./redissession.md#redissessionstoresaveowned)
+- [`redissession.Store.Touch`](./redissession.md#redissessionstoretouch)
+- [`redissession.Store.Delete`](./redissession.md#redissessionstoredelete)
+- [`redissession.Store.DeleteOwner`](./redissession.md#redissessionstoredeleteowner)
 - [JSON with a status](./responses.md#json-with-a-status)
 - [`OK`](./responses.md#ok)
 - [`Created`](./responses.md#created)

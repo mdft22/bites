@@ -319,6 +319,16 @@ perEmail := bites.NewRateLimiter(bites.RateLimitOptions{Limit: 5, Period: time.M
 
 Paste `store.Schema()` into a migration, or call `store.CreateTable(ctx)`. Keep the cheap in-memory limit by address first (`app.Use` with a limiter that has no `Store`) so a flood is stopped before it reaches the database, and use the shared store for the limits that must hold across instances. The time a bucket is measured on is the app's clock, so keep the instances' clocks within a second of each other (NTP): a skew of `s` moves a limit by `s` of bucket. The table is `UNLOGGED`, so a crash or failover of Postgres resets every limit once. A store's error is a 500: if you would rather let requests through while the database is down, make your store say so.
 
+**With Redis or Valkey, it is the module [`redisratelimit`](../reference/redisratelimit.md)**, which takes the application's `redis.UniversalClient` and needs no table and no Service, because Redis deletes a bucket when its TTL ends. A limit is one Lua script and one round trip, the key kept only as a hash, and the `Name` is given for the same reason as above:
+
+```go
+client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+store := redisratelimit.New(redisratelimit.Options{Client: client, Name: "login"})
+perEmail := bites.NewRateLimiter(bites.RateLimitOptions{Limit: 5, Period: time.Minute, Store: store, Name: "login"})
+```
+
+Give the server `maxmemory-policy noeviction` (or room): a Redis that evicts buckets resets limits, and one that restarts without persistence resets them once.
+
 ## Keeping a session
 
 **A [`Session`](../reference/security.md#session) is a value of your type kept for a browser in a cookie sealed with AES-256-GCM.** Make the [`Sessions`](../reference/security.md#sessions) once with your keys and give its `Load` to `Provide`; an Input field of type `Session[T]` then holds the session.
@@ -395,6 +405,16 @@ store := pgsession.New(pgsession.Options{Pool: pool})
 app.Service(store.Service())
 logins := bites.NewSessions[Login](bites.SessionOptions{Keys: keys, Store: store})
 ```
+
+**With Redis or Valkey, the store is the module [`redissession`](../reference/redissession.md).** It is an `OwnerSessionStore` over the application's `redis.UniversalClient` that keeps only the SHA-256 of each id and of each owner and gives each session a TTL, so Redis deletes it when it ends and nothing is registered or created:
+
+```go
+client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+store := redissession.New(redissession.Options{Client: client})
+logins := bites.NewSessions[Login](bites.SessionOptions{Keys: keys, Store: store})
+```
+
+Sessions are revoked at once, as with Postgres, so do not read them from replicas, and give the server `maxmemory-policy noeviction` (or room): a Redis that evicts signs users out. The application's own transaction cannot include a Redis write, so the atomic password change below is the Postgres store's.
 
 **A password change that must end the other sessions atomically runs `RevokeOthers` in the application's transaction:** give it a ctx made by `pgsession.WithTx`, and the sessions end when the transaction commits and not before, so a rollback leaves them alive. The session id stays hidden from your code:
 

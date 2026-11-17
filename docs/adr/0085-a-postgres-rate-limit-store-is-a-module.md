@@ -42,7 +42,7 @@
 - **`RetryAfter` of a refusal can be early** under contention (above).
 - **Several limiters on one table need distinct Names and nothing checks it.**
 - **The schema is not migrated**, as for `pgsession`.
-- **Postgres only.** A Redis store is a module of its own when an application asks; the interface and the conformance suite are what it must meet.
+- **Postgres only.** The Redis and Valkey store is the module `redisratelimit` ([ADR 0093](0093-redis-and-valkey-stores-are-two-modules-and-every-change-is-one-lua-script.md)), which meets the same interface and conformance suite.
 
 **Considered and what was rejected.**
 
