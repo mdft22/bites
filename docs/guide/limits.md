@@ -111,8 +111,50 @@ Connection: close
 - **408, `request body too slow`.** The body did not arrive within the route's `BodyTimeout`; a client that sends a byte a second is caught here. The connection closes.
 - **431, `request head too large` or `too many header fields`.** The head is over `MaxHead`, or has more than `MaxFields` fields. The connection closes.
 - **503 with `Retry-After: 5`.** The upload route already has `MaxInFlight` uploads running, answered after the head and before `100 Continue`, so the client never sends the body. The connection closes.
+- **503 with `Retry-After: 1`, from a `ConcurrencyLimiter`.** The route's limit on requests running is reached and its backlog is full, or the request waited `MaxWait`, or the server is shutting down. See [Capping the requests a route runs at once](#capping-the-requests-a-route-runs-at-once). The connection stays open.
 - **400.** JSON nested deeper than `MaxDepth`.
 - **Nothing.** A head that does not arrive within `HeadTimeout`, a TLS handshake over `HandshakeTimeout`, an idle connection over `IdleTimeout`, and a write that takes longer than `WriteTimeout` close the connection with no answer, because there is nobody to answer or nothing the client would read. A connection over `MaxConns` is not accepted: the engine stops calling `accept` and the kernel's backlog holds the rest.
+
+## Capping the requests a route runs at once
+
+**A [`ConcurrencyLimiter`](../reference/middleware.md#concurrencylimiter) lets at most `Limit` requests run behind it, holds a few more for a moment, and answers the rest 503 with `Retry-After`.** Use it for a handler too costly to run unbounded, such as a report over a year of data: connections bound how many requests there are, and nothing bounds how many of them reach that handler at once ([ADR 0091](../adr/0091-a-concurrency-limiter-bounds-the-requests-running-queues-a-few-and-answers-the-rest-503.md)).
+
+<!-- compiles: body -->
+```go
+reports := bites.NewConcurrencyLimiter(bites.ConcurrencyOptions{Name: "reports", Limit: 4})
+app.Get("/reports/year", func(ctx context.Context, in struct{}) (bites.Text, error) {
+	return bites.Text{}, nil
+}, bites.Use(reports.Middleware()))
+```
+
+**`Name` and `Limit` are required, and the rest has a default that is bounded.** `Backlog` is how many requests may wait for a slot when `Limit` are running, `Limit` when zero; `MaxWait` is how long one may wait, one second when zero. A request that finds the backlog full is refused at once, and one that has waited `MaxWait` is refused then. The waiting is first come first served: a slot that frees is handed to the longest waiter, so a request that arrives a moment later does not pass it. For no waiting at all, `NoBacklog: true` refuses as soon as `Limit` are running; zero is not "none", it is the default, and `NoBacklog` is given with neither `Backlog` nor `MaxWait`.
+
+**Where you give the middleware decides what is counted.** `app.Use(l.Middleware())` bounds every request the app serves, a 404 included; `Use(l.Middleware())` on a group bounds the group; on a route, the route. One limiter given to several places is one limit for all of them, so a group's routes share its slots; make one limiter for each route when each should have its own. Put a [`RateLimiter`](./security.md) outside it (give it first): the limit shares the handler's capacity in arrival order and does not tell clients apart, so without a limit for each client one client's burst fills the backlog.
+
+**What a client sees.** A refused request is a 503 problem+json whose detail names the limiter and says why, with `Retry-After` in whole seconds: `MaxWait` rounded up, at least 1.
+
+```http
+HTTP/1.1 503 Service Unavailable
+Content-Type: application/problem+json
+Retry-After: 1
+
+{"title":"Service Unavailable","status":503,"detail":"the \"reports\" limit of 4 running requests is reached and its backlog of 4 is full; retry in 1 s"}
+```
+
+A 503 and not a 429, because the client did nothing wrong: the server cannot take the request now, whoever sent it, and a proxy may retry a 503 on another instance. A client that retries should add jitter to the `Retry-After`, or the requests that were refused together come back together.
+
+**What you see.** The first refused request writes a Warn line, `bites: load shed: a concurrency limit is refusing requests with 503`, with the limiter, the reason, the running and waiting counts, and the number refused since the last line; while it goes on there is at most one line a second, so the log says an overload began and how large it is without growing with it. In an Observer, `errors.Is(out.Err, bites.ErrShed)` tells a request the limiter refused from a 503 the handler chose, and [`Metrics`](./observability.md) counts them in `bites_requests_shed_total{method,route}`. A request that waited and then ran has `limiter` and `limiter_wait` in its access record, so a slow request is not read as a slow handler. For a gauge of your own, `Stats()` returns `Running` and `Waiting` and the counts of what became of every request that queued:
+
+<!-- compiles: body -->
+```go
+reports := bites.NewConcurrencyLimiter(bites.ConcurrencyOptions{Name: "reports", Limit: 4})
+s := reports.Stats()
+slog.Info("reports", "running", s.Running, "waiting", s.Waiting, "shed", s.ShedFull+s.ShedWait)
+```
+
+**A request that leaves gives its place back.** When the client disconnects while its request waits, or a [`Timeout`](./first-party-middleware.md#cutting-off-a-slow-handler) outside the limiter passes, the request leaves the backlog and takes no slot; it is not counted as shed. A handler that panics or returns an error releases its slot. When [Shutdown](./deploying.md) begins (after `WithShutdownDelay` has served for its length), the requests waiting are refused at once with a 503 and `Retry-After` so their clients retry elsewhere, and the ones running finish.
+
+**What it does not count.** A `Stream` or `SSE` that a handler returns runs after the middleware has returned, so the limit bounds the time to produce it and not its life. The limit is by request, not by cost, and not by client. A limiter belongs to one app. An `Upload` route may carry both this and [`MaxInFlight`](../reference/input.md#maxinflight): `MaxInFlight` refuses at once, before `100 Continue`, so the client never sends the body, and this one bounds the handler's work.
 
 ## Timeouts
 

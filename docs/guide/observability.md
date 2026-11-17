@@ -110,6 +110,7 @@ http_server_request_duration_seconds_count{method="GET",route="/ping",code="200"
 http_server_request_duration_seconds_count{method="GET",route="",code="404"} 7
 http_server_response_body_bytes_total{method="GET",route="/ping",code="200"} 164
 http_server_abandoned_requests_total{method="GET",route="/ping"} 0
+bites_requests_shed_total{method="GET",route="/ping"} 0
 http_server_requests_active 1
 ```
 

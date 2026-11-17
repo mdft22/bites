@@ -3,6 +3,7 @@ package bites
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -49,7 +50,8 @@ const defaultMaxSeries = 10000
 // The families are http_server_request_duration_seconds (a histogram, from the parsed head to
 // the last byte), http_server_request_body_bytes_total and http_server_response_body_bytes_total
 // (counters, the response's after gzip), all three labelled method, route and code;
-// http_server_abandoned_requests_total, labelled method and route; http_server_requests_active, a
+// http_server_abandoned_requests_total and bites_requests_shed_total (the requests a
+// ConcurrencyLimiter refused, ADR 0091), both labelled method and route; http_server_requests_active, a
 // gauge; and bites_metrics_dropped_total.
 //
 // Metrics is also a SocketObserver (ADR 0063) and counts WebSockets by route: the gauge
@@ -103,6 +105,7 @@ type series struct {
 	read      atomic.Uint64
 	written   atomic.Uint64
 	abandoned atomic.Uint64
+	shed      atomic.Uint64 // answered by a ConcurrencyLimiter's refusal (ErrShed)
 }
 
 // NewMetrics returns a Metrics. It panics when more than one options value is given, a bucket is
@@ -213,6 +216,9 @@ func (m *Metrics) End(_ context.Context, req Request, out Outcome) {
 	}
 	if out.Abandoned {
 		s.abandoned.Add(1)
+	}
+	if out.Err != nil && errors.Is(out.Err, ErrShed) {
+		s.shed.Add(1)
 	}
 	if out.Status == 0 {
 		return // nothing was answered: no code to count it under
@@ -361,6 +367,21 @@ func (m *Metrics) appendText(b []byte) []byte {
 			n += snap[keys[i]].abandoned.Load()
 		}
 		b = append(b, ab+"{"...)
+		b = labels(b, k, false)
+		b = append(b, "} "...)
+		b = strconv.AppendUint(b, n, 10)
+		b = append(b, '\n')
+	}
+
+	const sh = "bites_requests_shed_total"
+	b = append(b, "# HELP "+sh+" Requests a ConcurrencyLimiter refused with a 503, because its backlog was full, its MaxWait passed or Shutdown began.\n# TYPE "+sh+" counter\n"...)
+	for i := 0; i < len(keys); {
+		k := keys[i]
+		var n uint64
+		for ; i < len(keys) && keys[i].method == k.method && keys[i].route == k.route; i++ {
+			n += snap[keys[i]].shed.Load()
+		}
+		b = append(b, sh+"{"...)
 		b = labels(b, k, false)
 		b = append(b, "} "...)
 		b = strconv.AppendUint(b, n, 10)

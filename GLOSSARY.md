@@ -455,7 +455,7 @@ An Input field or dependency `Opt[T]` whose `T` has an auth Provider: the Provid
 _Avoid_: anonymous auth, soft auth, guest mode
 
 **Rate limiter**:
-`RateLimiter`: a token bucket per key (the client address by default, or a user's id through `Allow` in a Provider), held in a bounded in-memory store or a shared one, which for Postgres is the module `pgratelimit` ([ADR 0055](docs/adr/0055-rate-limiting-is-a-token-bucket-per-key-with-a-bounded-store.md), [ADR 0085](docs/adr/0085-a-postgres-rate-limit-store-is-a-module.md)).
+`RateLimiter`: a token bucket per key (the client address by default, or a user's id through `Allow` in a Provider), held in a bounded in-memory store or a shared one, which for Postgres is the module `pgratelimit` and for Redis or Valkey the module `redisratelimit` ([ADR 0055](docs/adr/0055-rate-limiting-is-a-token-bucket-per-key-with-a-bounded-store.md), [ADR 0085](docs/adr/0085-a-postgres-rate-limit-store-is-a-module.md), [ADR 0093](docs/adr/0093-redis-and-valkey-stores-are-two-modules-and-every-change-is-one-lua-script.md)).
 _Avoid_: throttle, quota manager
 
 **Idempotency key**:
@@ -465,6 +465,18 @@ _Avoid_: request id, dedupe key, replay token, nonce
 **Claim**:
 What an `IdempotencyStore` records for a key while a request runs: the key is held until `InFlight` passes, a duplicate that arrives meanwhile is answered 409, and the claim is completed with the answer or released when the request did not do its work. Not a lock the handler holds ([ADR 0090](docs/adr/0090-a-write-sent-again-with-the-same-idempotency-key-is-answered-with-the-first-answer.md)).
 _Avoid_: lock, lease, reservation
+
+**Concurrency limiter**:
+`ConcurrencyLimiter`: a middleware made by `NewConcurrencyLimiter`, given with `Use` to the app, a group or a route, that lets at most `Limit` requests run behind it, holds `Backlog` more for at most `MaxWait` in arrival order, and answers the rest 503 with `Retry-After`. One limiter given to several scopes is one limit shared by them ([ADR 0091](docs/adr/0091-a-concurrency-limiter-bounds-the-requests-running-queues-a-few-and-answers-the-rest-503.md)).
+_Avoid_: throttle, bulkhead, semaphore, max connections
+
+**Backlog**:
+The requests of a `ConcurrencyLimiter` that wait for a slot when `Limit` are running, bounded in number by `Backlog` and in time by `MaxWait`, served in the order they arrived. A request that finds it full is shed at once ([ADR 0091](docs/adr/0091-a-concurrency-limiter-bounds-the-requests-running-queues-a-few-and-answers-the-rest-503.md)).
+_Avoid_: queue, buffer, pool
+
+**Shed**:
+To refuse a request with a 503 and `Retry-After` because a `ConcurrencyLimiter` cannot take it now: its backlog is full, it waited `MaxWait`, or the server is shutting down. A shed request has `errors.Is(out.Err, ErrShed)` in its `Outcome` and is counted by `Metrics` as `bites_requests_shed_total`; a request whose client left while it waited is not shed, it leaves the backlog and gives its place back ([ADR 0091](docs/adr/0091-a-concurrency-limiter-bounds-the-requests-running-queues-a-few-and-answers-the-rest-503.md)).
+_Avoid_: drop, reject, throttle
 
 **Trusted proxy**:
 A load balancer or proxy whose network the app lists with `WithTrustedProxies`, by CIDR; only a connection from one may name the client's address or scheme in a forwarding header, and the public host and prefix when the app says its proxies write them ([ADR 0025](docs/adr/0025-no-proxy-is-trusted-by-default.md)). No proxy is trusted by default.

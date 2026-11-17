@@ -17,7 +17,7 @@ A design page is where a reader starts and an ADR is where the evidence is. Ever
 | [Middleware and Providers](middleware-and-providers.md) | the request view and response value, Providers, the four first-party middleware | 0022, 0023, 0032 |
 | [Observability](observability.md) | the Observer, the access log, metrics, W3C trace context, health and readiness | 0051, 0059, 0060, 0032, 0052 |
 | [Security](security.md) | trusted proxies, security headers, auth Providers, rate limiting, sessions, CSRF | 0053, 0054, 0055, 0056, 0057 |
-| [Limits](limits.md) | every limit on by default, with its own status | 0024 |
+| [Limits](limits.md) | every limit on by default, with its own status, and a limit on requests running | 0024, 0091 |
 | [WebSockets](websocket.md) | message handlers, typed routes, send queues, topics, heartbeats, origins, inbound limits | 0035, 0036, 0037, 0038, 0039, 0040, 0046, 0047 |
 | [OpenAPI](openapi.md) | the API document, built at Registration and served as fixed bytes, its prose generated from comments, its documentation UI | 0020, 0071, 0072, 0076 |
 | [Testing](testing.md) | in-memory connections, a manual clock and a WebSocket client, a snapshot of the API document | 0027, 0074, 0075 |

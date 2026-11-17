@@ -1,6 +1,6 @@
 # Middleware
 
-**The Middleware type, the read-only Request view and the Response value it works with, the Use option, and the first-party middleware CORS, RequestID and Timeout.**
+**The Middleware type, the read-only Request view and the Response value it works with, the Use option, and the first-party middleware CORS, RequestID, Timeout and ConcurrencyLimiter.**
 
 **Guide:** [middleware](../guide/middleware.md) · **Design:** [middleware and Providers](../design/middleware-and-providers.md)
 
@@ -540,3 +540,85 @@ app.Get("/report", func(ctx context.Context, in struct{}) (bites.Text, error) {
 	}
 }, bites.Use(bites.Timeout(2*time.Second)))
 ```
+
+## Concurrency limit
+
+### `NewConcurrencyLimiter`
+
+```go
+func NewConcurrencyLimiter(o ConcurrencyOptions) *ConcurrencyLimiter
+```
+
+NewConcurrencyLimiter returns a limiter that lets at most `Limit` requests run at once behind its `Middleware`, queues up to `Backlog` more for at most `MaxWait`, and answers the rest 503 with `Retry-After` ([ADR 0091](../adr/0091-a-concurrency-limiter-bounds-the-requests-running-queues-a-few-and-answers-the-rest-503.md)). It panics, naming the constructor, the field and the line it was called from, when `Name` is empty, longer than 32 or not letters, digits, `-` and `_`; when `Limit` is below 1; when `Backlog` or `MaxWait` is given with no `Limit`; when `Limit` or `Backlog` is above 1,073,741,824; when `Backlog` or `MaxWait` is negative; and when `NoBacklog` is given with a `Backlog` or a `MaxWait`. Allocations: none for a request that finds a free slot, so a typed POST stays at 2 ([ADR 0003](../adr/0003-the-trade-budget.md)).
+
+<!-- compiles: body -->
+
+```go
+reports := bites.NewConcurrencyLimiter(bites.ConcurrencyOptions{Name: "reports", Limit: 4})
+app.Get("/reports/year", func(ctx context.Context, in struct{}) (bites.Text, error) {
+	return bites.Text{}, nil
+}, bites.Use(reports.Middleware()))
+```
+
+### `ConcurrencyLimiter`
+
+```go
+type ConcurrencyLimiter struct {
+	// unexported fields
+}
+```
+
+ConcurrencyLimiter bounds how many requests run at once behind its `Middleware`. One limiter given to several scopes is one limit shared by all of them; one limiter made for each route is a limit for each. A request that finds a free slot takes it and runs. When `Limit` are running a request joins the backlog if it has room, behind those already there, and is handed the next slot that frees, in arrival order. A request leaves the backlog with a 503 when it has waited `MaxWait` or when Shutdown starts, and silently, giving its place back, when its context is done (the client disconnected, or a `Timeout` outside the limiter passed). The slot is released when the chain inside the limiter returns, a panic included. A `Stream` or `SSE` that a handler returns runs after the chain has returned, so it is not counted. Give a limiter to one app.
+
+The 503 is problem+json whose detail names the limiter and the reason, with `Retry-After`; `errors.Is(err, ErrShed)` finds it in an `Outcome`, and `Metrics` counts it as `bites_requests_shed_total`. The first refusal is logged at Warn, and then at most one line a second with the number refused since the last. A request that waited and ran adds `limiter` and `limiter_wait` to its access record. The API document gives the route a `503` that refers to `ServiceUnavailable`.
+
+### `ConcurrencyLimiter.Middleware`
+
+```go
+func (l *ConcurrencyLimiter) Middleware() Middleware
+```
+
+Middleware limits the requests that reach it. Give it to `app.Use` to bound every request, a 404 included, or with `Use` to a group or a route. Put a `RateLimiter` outside it, since the limit shares capacity first come first served and so one client's burst fills the backlog unless something per client is outside.
+
+### `ConcurrencyLimiter.Stats`
+
+```go
+func (l *ConcurrencyLimiter) Stats() ConcurrencyStats
+```
+
+Stats returns the limiter's counts now. It takes the limiter's lock briefly and is for a gauge scraped every few seconds, not for every request.
+
+### `ConcurrencyOptions`
+
+```go
+type ConcurrencyOptions struct {
+	Name      string
+	Limit     int
+	Backlog   int
+	MaxWait   time.Duration
+	NoBacklog bool
+}
+```
+
+ConcurrencyOptions configures `NewConcurrencyLimiter`. `Name` is required: it names the limiter in the 503, the log line and `Stats`. `Limit`, required and at least 1, is the most requests that run at once. `Backlog` is how many may wait in arrival order when `Limit` are running, `Limit` when zero; a request that finds it full is refused at once. `MaxWait` is how long a request may wait for a slot, one second when zero, and it is what `Retry-After` says rounded up to whole seconds, at least 1. `NoBacklog` refuses at once when `Limit` are running, with no waiting: it is a field of its own because a zero `Backlog` is the default; it is refused with a `Backlog` or a `MaxWait`.
+
+### `ConcurrencyStats`
+
+```go
+type ConcurrencyStats struct {
+	Running, Waiting                      int
+	Queued, Waited                        uint64
+	WaitTotal                             time.Duration
+	ShedFull, ShedWait, ShedShutdown, Left uint64
+}
+```
+
+ConcurrencyStats is a limiter's counts at one moment. `Running` and `Waiting` are gauges; the rest only rise. `Queued` counts the requests that entered the backlog, whatever came of them; `Waited` those that ran after waiting, with `WaitTotal` the time they spent there; `ShedFull` the requests refused because `Limit` were running and `Backlog` waiting; `ShedWait` those that waited `MaxWait` without a slot; `ShedShutdown` those refused because Shutdown had started; `Left` those that left the backlog because their context was done, which are not shed.
+
+### `ErrShed`
+
+```go
+var ErrShed = errors.New("bites: the request was shed by a concurrency limit")
+```
+
+ErrShed is what `errors.Is` finds in the `Err` of an `Outcome` for a request a `ConcurrencyLimiter` refused, so an Observer can tell a shed 503 from a 503 the handler chose.

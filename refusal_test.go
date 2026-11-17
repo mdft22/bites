@@ -2143,6 +2143,50 @@ func TestEveryMistakeIsRefusedAtRegistrationWithTheMessageWrittenForIt(t *testin
 			bites.NewSessions[intOwner](at(bites.SessionOptions{Keys: [][]byte{key(1)}, Store: newMemStore()}))
 		},
 			"NewSessions: intOwner has a SessionOwner method of type func(bites_test.intOwner) int; it must be func() string, returning the owner of the session", false},
+		{"NewConcurrencyLimiter with no Limit is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports"}))
+		},
+			"NewConcurrencyLimiter: Limit is 0: give the most requests that may run at once, at least 1", false},
+		{"NewConcurrencyLimiter with a negative Limit is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", Limit: -3}))
+		},
+			"NewConcurrencyLimiter: Limit is -3: give the most requests that may run at once, at least 1", false},
+		{"NewConcurrencyLimiter with a Backlog and no Limit is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", Backlog: 10}))
+		},
+			"NewConcurrencyLimiter: Backlog or MaxWait is given with no Limit: they only bound the requests waiting for a slot, so give Limit, the most requests that run at once, at least 1", false},
+		{"NewConcurrencyLimiter with a MaxWait and no Limit is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", MaxWait: time.Second}))
+		},
+			"NewConcurrencyLimiter: Backlog or MaxWait is given with no Limit: they only bound the requests waiting for a slot, so give Limit, the most requests that run at once, at least 1", false},
+		{"NewConcurrencyLimiter with a Limit too large to count is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", Limit: 1 << 31}))
+		},
+			"NewConcurrencyLimiter: Limit is 2147483648 and Backlog is 0: the limiter counts requests in 32 bits, so give each at most 1073741824", false},
+		{"NewConcurrencyLimiter with a negative Backlog is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", Limit: 4, Backlog: -1}))
+		},
+			"NewConcurrencyLimiter: Backlog is -1, which is not a bound: give zero for Limit, or the most requests that may wait, or NoBacklog to refuse at once", false},
+		{"NewConcurrencyLimiter with a negative MaxWait is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", Limit: 4, MaxWait: -time.Second}))
+		},
+			"NewConcurrencyLimiter: MaxWait is -1s, which is not a wait: give zero for one second, or how long a request may wait for a slot", false},
+		{"NewConcurrencyLimiter with NoBacklog and a Backlog is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", Limit: 4, NoBacklog: true, Backlog: 2}))
+		},
+			"NewConcurrencyLimiter: NoBacklog is given with Backlog or MaxWait: NoBacklog refuses a request at once when Limit are running, so nothing waits, and drop one of the two", false},
+		{"NewConcurrencyLimiter with NoBacklog and a MaxWait is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "reports", Limit: 4, NoBacklog: true, MaxWait: time.Second}))
+		},
+			"NewConcurrencyLimiter: NoBacklog is given with Backlog or MaxWait: NoBacklog refuses a request at once when Limit are running, so nothing waits, and drop one of the two", false},
+		{"NewConcurrencyLimiter with no Name is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Limit: 4}))
+		},
+			`NewConcurrencyLimiter: Name "" is not a name: give the limiter a short name such as "reports", at most 32 letters, digits, '-' or '_', for the 503, the log and Stats to name it by`, false},
+		{"NewConcurrencyLimiter with a Name that is not a token is refused at construction", func(*bites.App) {
+			bites.NewConcurrencyLimiter(at(bites.ConcurrencyOptions{Name: "big reports", Limit: 4}))
+		},
+			`NewConcurrencyLimiter: Name "big reports" is not a name: give the limiter a short name such as "reports", at most 32 letters, digits, '-' or '_', for the 503, the log and Stats to name it by`, false},
 		{"NewRateLimiter with no limit is refused at construction", func(*bites.App) {
 			bites.NewRateLimiter(at(bites.RateLimitOptions{Period: time.Minute}))
 		},

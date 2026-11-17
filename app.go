@@ -458,7 +458,8 @@ type App struct {
 	obs      []Observer // WithObserver, in order (ADR 0051)
 	obsWhere string     // where it was given, for the refusal of a second one
 
-	health health // WithHealth, WithShutdownDelay and SetReady (ADR 0052)
+	health   health     // WithHealth, WithShutdownDelay and SetReady (ADR 0052)
+	limiters limiterSet // the ConcurrencyLimiters this app has served a request through, told of Shutdown (ADR 0091)
 
 	life lifecycle // App.Service and WithServiceTimeout (ADR 0079)
 
@@ -1126,6 +1127,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	if a.health.delay > 0 {
 		a.waitDelay(ctx)
 	}
+	a.limiters.drain() // the requests still waiting for a slot are sent away to retry elsewhere, after the delay that serves them
 	errs = append(errs, srv.Shutdown(ctx))
 	errs = append(errs, a.stopServices(ctx))
 	return joinErrors(errs...)

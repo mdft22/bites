@@ -10,7 +10,7 @@ Every exported name of `bites`, `bitetest` and `stdhttp`, one heading each, with
 | [Input types](./input.md) | the Sections, `Opt`, `Null`, the constraint types, `Form`, `Submitted`, `Raw`, `Upload` and `Part`, and the options that bound a body |
 | [Responses](./responses.md) | the status wrappers, `Text`, `Bytes`, `Page`, `File`, `Static`, `Header`, `Cookie`, `OneOf2` to `OneOf4`, `Returns`, `Stream`, `SSE`, `Events` and their errors |
 | [Errors](./errors.md) | `StatusError` and its constructors, `Invalid` and `FieldError`, `ErrClientGone` and `Cause`, and the problem+json shape |
-| [Middleware](./middleware.md) | `Middleware`, `Request`, `Response`, `Next`, `Use`, `CORS`, `RequestID` and `Timeout` |
+| [Middleware](./middleware.md) | `Middleware`, `Request`, `Response`, `Next`, `Use`, `CORS`, `RequestID`, `Timeout` and `ConcurrencyLimiter` |
 | [Observability](./observability.md) | `Observer`, `Outcome`, `WithObserver`, `AccessLog`, `Metrics` and `ServeMetrics`, `Trace` and `WithTraceContext`, `WithHealth`, `WithShutdownDelay` and `SetReady` |
 | [Idempotency](./idempotency.md) | `Idempotency` and `NewIdempotency`, `IdempotencyOptions`, the `IdempotencyStore` interface and the types it passes |
 | [Providers](./providers.md) | `Provide` and `Override` on the app, a group and a route |
@@ -428,6 +428,14 @@ A heading is the exported name itself, so the anchor of `App.Get` is `app.md#app
 - [`RequestID`](./middleware.md#requestid)
 - [`RequestIDOptions`](./middleware.md#requestidoptions)
 - [`Timeout`](./middleware.md#timeout)
+- [Concurrency limit](./middleware.md#concurrency-limit)
+- [`NewConcurrencyLimiter`](./middleware.md#newconcurrencylimiter)
+- [`ConcurrencyLimiter`](./middleware.md#concurrencylimiter)
+- [`ConcurrencyLimiter.Middleware`](./middleware.md#concurrencylimitermiddleware)
+- [`ConcurrencyLimiter.Stats`](./middleware.md#concurrencylimiterstats)
+- [`ConcurrencyOptions`](./middleware.md#concurrencyoptions)
+- [`ConcurrencyStats`](./middleware.md#concurrencystats)
+- [`ErrShed`](./middleware.md#errshed)
 - [Observers](./observability.md#observers)
 - [`Observer`](./observability.md#observer)
 - [`SocketObserver`](./observability.md#socketobserver)

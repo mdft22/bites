@@ -144,6 +144,7 @@ Metrics is an Observer that counts requests by method, route pattern and status 
 | `http_server_request_body_bytes_total` | counter | method, route, code |
 | `http_server_response_body_bytes_total` | counter, after gzip | method, route, code |
 | `http_server_abandoned_requests_total` | counter | method, route |
+| `bites_requests_shed_total` | counter, the requests a [`ConcurrencyLimiter`](./middleware.md#concurrencylimiter) refused | method, route |
 | `http_server_requests_active` | gauge | none |
 | `bites_websocket_connections_open` | gauge, sockets open | route |
 | `bites_websocket_connections_opened_total` | counter | route |

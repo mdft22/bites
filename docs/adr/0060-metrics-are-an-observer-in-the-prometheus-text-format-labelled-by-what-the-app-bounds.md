@@ -16,6 +16,7 @@ app.ServeMetrics("/metrics", m)
 | `http_server_request_body_bytes_total` | counter, body bytes read | method, route, code |
 | `http_server_response_body_bytes_total` | counter, body bytes written after gzip | method, route, code |
 | `http_server_abandoned_requests_total` | counter, the client left or stopped reading | method, route |
+| `bites_requests_shed_total` | counter, the requests a `ConcurrencyLimiter` refused with a 503 ([ADR 0091](0091-a-concurrency-limiter-bounds-the-requests-running-queues-a-few-and-answers-the-rest-503.md)) | method, route |
 | `http_server_requests_active` | gauge, Start run and End not yet | none |
 | `bites_websocket_connections_open` | gauge, sockets open (revised 2026-11-04) | route |
 | `bites_websocket_connections_opened_total` | counter | route |
