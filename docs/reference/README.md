@@ -19,6 +19,7 @@ Every exported name of `bites`, `bitetest` and `stdhttp`, one heading each, with
 | [OpenAPI](./openapi.md) | `App.OpenAPI`, `Info`, `Summary`, `Description`, `Tag`, `Undocumented` and the `Descriptions` method |
 | [bitetest](./bitetest.md) | `Start`, `Server`, `Request`, `Response`, the WebSocket client `WS`, the fake `Clock`, the in-memory `Broker` and the conformance suites of the store interfaces |
 | [pgnotify](./pgnotify.md) | the module that carries a Topic between instances over Postgres `LISTEN`/`NOTIFY` |
+| [natsbroker](./natsbroker.md) | the module that carries a Topic between instances over core NATS, at most once, with a name as its subject under a prefix |
 | [pgsession](./pgsession.md) | the module that keeps sessions in Postgres as an `OwnerSessionStore`, revocable by owner |
 | [pgratelimit](./pgratelimit.md) | the module that keeps the buckets of a `RateLimiter` in Postgres as a `RateLimitStore`, so a limit holds across instances |
 | [redissession](./redissession.md) | the module that keeps sessions in Redis or Valkey as an `OwnerSessionStore`, revocable by owner |
@@ -447,6 +448,17 @@ A heading is the exported name itself, so the anchor of `App.Get` is `app.md#app
 - [`ConcurrencyOptions`](./middleware.md#concurrencyoptions)
 - [`ConcurrencyStats`](./middleware.md#concurrencystats)
 - [`ErrShed`](./middleware.md#errshed)
+- [`natsbroker.New`](./natsbroker.md#natsbrokernew)
+- [`natsbroker.Options`](./natsbroker.md#natsbrokeroptions)
+- [`natsbroker.Broker`](./natsbroker.md#natsbrokerbroker)
+- [`natsbroker.Broker.Run`](./natsbroker.md#natsbrokerbrokerrun)
+- [`natsbroker.Broker.Close`](./natsbroker.md#natsbrokerbrokerclose)
+- [`natsbroker.Broker.Listening`](./natsbroker.md#natsbrokerbrokerlistening)
+- [`natsbroker.Broker.Publish`](./natsbroker.md#natsbrokerbrokerpublish)
+- [`natsbroker.Broker.Subscribe`](./natsbroker.md#natsbrokerbrokersubscribe)
+- [`natsbroker.Broker.Accepts`](./natsbroker.md#natsbrokerbrokeraccepts)
+- [`natsbroker.ErrClosed`](./natsbroker.md#natsbrokererrclosed)
+- [`natsbroker.ErrNotConnected`](./natsbroker.md#natsbrokererrnotconnected)
 - [Observers](./observability.md#observers)
 - [`Observer`](./observability.md#observer)
 - [`SocketObserver`](./observability.md#socketobserver)

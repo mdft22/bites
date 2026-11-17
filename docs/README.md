@@ -80,7 +80,7 @@ In the order the guide teaches them. Each row is one guide page and the referenc
 
 | Topic | Reference | Design |
 |---|---|---|
-| [WebSockets](./guide/websockets.md) | [WebSockets](./reference/websocket.md), [`pgnotify`](./reference/pgnotify.md) | [WebSockets](./design/websocket.md) |
+| [WebSockets](./guide/websockets.md) | [WebSockets](./reference/websocket.md), [`pgnotify`](./reference/pgnotify.md), [`natsbroker`](./reference/natsbroker.md) | [WebSockets](./design/websocket.md) |
 
 ### Describing the API
 

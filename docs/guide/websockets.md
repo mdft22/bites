@@ -281,6 +281,20 @@ room := bites.NewTopic[Frame]("room.7", broker, bites.TopicOptions{
 })
 ```
 
+**Where the instances share NATS and not a database, the broker is the module [`natsbroker`](../reference/natsbroker.md)**, which has the same lifecycle and is held to the same suite:
+
+```go
+broker := natsbroker.New(natsbroker.Options{
+	URL:     "nats://nats-1:4222,nats://nats-2:4222",
+	Prefix:  "myapp", // the subject of "room.7" is "myapp.room.7"; applications on one server use different prefixes
+	OnState: func(listening bool) { app.SetReady(listening) },
+})
+go broker.Run(ctx)
+defer broker.Close()
+```
+
+It delivers at most once, so the gap of the third point below is how an application learns it missed a message, and a `Publish` made while the connection is down returns `natsbroker.ErrNotConnected` and sends nothing, so the same "treat a failed publish as a log line" applies. A name or a family key with a space, a `*` or `>`, or an empty part between dots is refused, because NATS would read it as something else: encode a key that comes from data (hex, or `base64.RawURLEncoding`) before it is given to a [`Topics`](../reference/websocket.md#topics). Decision: [ADR 0094](../adr/0094-a-nats-broker-is-a-module-with-at-most-once-delivery-and-a-name-is-its-subject.md).
+
 Four things hold, and the design is [ADR 0081](../adr/0081-a-topic-reaches-other-instances-through-a-broker-and-postgres-is-a-module.md):
 
 - **`Publish` goes through the broker, and the broker delivers to every instance's sockets, the publisher's own included.** There is no second, local path, so a message is never delivered twice to the sockets of the instance that published it, and every instance hears the same order. A `Publish` that fails delivers nothing and returns the error: post to the database first, then publish, and treat a failed publish as a log line, because the message is stored.

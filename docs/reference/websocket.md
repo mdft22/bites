@@ -515,7 +515,7 @@ Len is the number of open Sockets of `owner`, those closing included until they 
 
 ## Across instances
 
-A Topic made with `NewTopic` listens to its broker while it has a socket, and stops when the last one leaves, so it needs no `Close`. Guide: [WebSockets across several instances](../guide/websockets.md#across-several-instances). Decision: [ADR 0081](../adr/0081-a-topic-reaches-other-instances-through-a-broker-and-postgres-is-a-module.md). The Postgres broker is the module [`pgnotify`](./pgnotify.md); [`bitetest.Broker`](./bitetest.md#bitetestbroker) is the in-memory one for tests.
+A Topic made with `NewTopic` listens to its broker while it has a socket, and stops when the last one leaves, so it needs no `Close`. Guide: [WebSockets across several instances](../guide/websockets.md#across-several-instances). Decision: [ADR 0081](../adr/0081-a-topic-reaches-other-instances-through-a-broker-and-postgres-is-a-module.md). The Postgres broker is the module [`pgnotify`](./pgnotify.md) and the NATS broker the module [`natsbroker`](./natsbroker.md); [`bitetest.Broker`](./bitetest.md#bitetestbroker) is the in-memory one for tests.
 
 ### `NewTopic`
 
