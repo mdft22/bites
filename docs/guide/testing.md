@@ -481,13 +481,14 @@ Pin the start of the message and the presence of `registered at`, not the line n
 
 ## Testing a store you wrote
 
-**A store or a `Broker` of your own is held to the promises of its interface by a suite, so a promise you did not read in the doc comment fails with its sentence.** `bitetest` has one for each: [`TestRateLimitStore`](../reference/bitetest.md#bitetesttestratelimitstore), [`TestSessionStore`](../reference/bitetest.md#bitetesttestsessionstore), [`TestOwnerSessionStore`](../reference/bitetest.md#bitetesttestownersessionstore), [`TestIdempotencyStore`](../reference/bitetest.md#bitetesttestidempotencystore) and [`TestBroker`](../reference/bitetest.md#bitetesttestbroker) ([ADR 0086](../adr/0086-a-store-is-held-to-its-interface-by-a-conformance-suite-in-bitetest.md)). Each takes a function that returns a new store for each subtest (a new table, a new prefix), so no subtest hears another:
+**A store or a `Broker` of your own is held to the promises of its interface by a suite, so a promise you did not read in the doc comment fails with its sentence.** `bitetest` has one for each: [`TestRateLimitStore`](../reference/bitetest.md#bitetesttestratelimitstore), [`TestSessionStore`](../reference/bitetest.md#bitetesttestsessionstore), [`TestOwnerSessionStore`](../reference/bitetest.md#bitetesttestownersessionstore), [`TestIdempotencyStore`](../reference/bitetest.md#bitetesttestidempotencystore), [`TestBroker`](../reference/bitetest.md#bitetesttestbroker) and [`TestJobLock`](../reference/bitetest.md#bitetesttestjoblock) (the `JobLock` of a [Cron job](../guide/deploying.md#a-schedule-at-a-time-of-day-and-one-instance-of-several), whose claims it judges on `bites.Now(ctx)` and moves with `Advance`) ([ADR 0086](../adr/0086-a-store-is-held-to-its-interface-by-a-conformance-suite-in-bitetest.md)). Each takes a function that returns a new store for each subtest (a new table, a new prefix), so no subtest hears another:
 
 ```go
 func TestMyStoreKeepsTheContract(t *testing.T) {
 	bitetest.TestRateLimitStore(t, func(t *testing.T) bites.RateLimitStore { return newMyStore(t) })
 	bitetest.TestSessionStore(t, func(t *testing.T) bites.SessionStore { return newMySessions(t) })
 	bitetest.TestOwnerSessionStore(t, func(t *testing.T) bites.OwnerSessionStore { return newMySessions(t) })
+	bitetest.TestJobLock(t, func(t *testing.T) bites.JobLock { return newMyLock(t) })
 	bitetest.TestBroker(t, bitetest.BrokerSuite{
 		New: func(t *testing.T) (bites.Broker, bites.Broker) { return newMyBroker(t), newMyBroker(t) }, // two instances that reach each other
 	})

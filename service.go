@@ -500,7 +500,8 @@ type EveryOptions struct {
 // recovered, logged at Error with its stack, and the loop goes on. Every panics at the call (a
 // RegistrationError naming the line) for a name that is empty or has a space, a quote or a
 // control character, for a nil fn, for an interval that is zero or negative, and when more than
-// one EveryOptions is given. Cron expressions and jitter are not offered. Register the result
+// one EveryOptions is given. A schedule at a clock time is Cron (ADR 0092), not an option
+// of Every; jitter is not offered. Register the result
 // with App.Service.
 func Every(name string, interval time.Duration, fn func(ctx context.Context) error, opts ...EveryOptions) Service {
 	where := callerWhere()

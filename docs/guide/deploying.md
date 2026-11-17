@@ -254,7 +254,40 @@ func (*Rows) NotifyStarting(context.Context, time.Time) error     { return nil }
 - **Calls are serial.** A run longer than the interval delays the next and never overlaps it; the ticks it missed are dropped, not run in a burst, and the log says at Warn how many (`bites: job took longer than its interval`). With several instances each runs the job: make it safe to run twice (a `DELETE` of old rows is; a mail is not, so guard it with a row lock or a claim in the database).
 - **An error from the function is logged at Warn and the loop goes on; a panic is recovered, logged at Error and the loop goes on.** A `Worker` that returns before `Stop`, with an error or nil, or panics, is logged at Error with its name and is not restarted: loop inside it when it must survive.
 - **`ctx` is the service's life, and `bites.Now(ctx)` and `bites.Logger(ctx)` read the app's clock and logger.** `Stop` cancels it and waits for a call in progress, so pass `ctx` to the database call; one that ignores it is abandoned and logged when `Shutdown`'s context ends.
-- **There is no cron expression and no jitter option.** For a schedule at a time of day, use `Every` with a short interval and compare `bites.Now(ctx)` to the time you want.
+- **There is no jitter option.** For a schedule at a time of day, use [`bites.Cron`](#a-schedule-at-a-time-of-day-and-one-instance-of-several).
+
+### A schedule at a time of day, and one instance of several
+
+**[`bites.Cron`](../reference/app.md#cron) calls a function at the times of a cron expression, read in a time zone you name, and a [`JobLock`](../reference/app.md#joblock) makes one instance of several run each time** ([ADR 0092](../adr/0092-a-cron-schedule-is-a-service-read-in-a-given-zone-and-a-job-lock-lets-one-instance-run-each-occurrence.md)). Use it for a report at 02:30, a digest on weekdays at nine, a purge every night; use `Every` for an interval.
+
+<!-- compiles: decls -->
+```go
+func registerSchedules(app *bites.App, lock bites.JobLock) error {
+	jakarta, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		return err
+	}
+	app.Service(bites.Cron("daily-report", "30 2 * * *", jakarta, func(ctx context.Context) error {
+		return buildReport(ctx, bites.ScheduledAt(ctx))
+	}, bites.CronOptions{Lock: lock}))
+	app.Service(bites.Cron("digest", "0 9 * * mon-fri", jakarta, func(ctx context.Context) error {
+		return sendDigest(ctx)
+	}))
+	return nil
+}
+
+func buildReport(context.Context, time.Time) error { return nil }
+func sendDigest(context.Context) error             { return nil }
+```
+
+- **The spec is the five fields of cron** (minute, hour, day of month, month, day of week) or `@daily`, `@hourly`, `@weekly`, `@monthly`, `@yearly`. Each field takes `*`, numbers, ranges, lists and steps (`*/15`, `10-40/10`); months and days may be `jan` and `mon`. When both the day of month and the day of week are given, a day matches either. There are no seconds, no `?`, `L`, `W` or `#`, and no `@every`. A wrong spec panics at the call and names the field and what to write: `spec "0 25 * * *" is not a schedule: hour "25": 25 is outside 0-23`.
+- **The time zone is required**, and `nil` and `time.Local` are refused: the same spec is a different schedule on another machine's zone. Give `time.UTC` or the result of `time.LoadLocation`; an image with no zone files needs `import _ "time/tzdata"`.
+- **A time of day runs once on the nights the clocks change.** On the night 02:00 becomes 03:00, `30 2 * * *` runs at 03:00, not never; on the night 02:00 becomes 01:00, `30 1 * * *` runs at its first 01:30, not twice. A spec that runs every hour (`@hourly`, `*/15 * * * *`) follows the clock: the skipped hour has no run and the repeated hour has two.
+- **There is no run at start.** The first run is the first time after the app started serving, and the start-up line says when (`bites: job scheduled`, with `next` in the job's zone). A job that must also run at start is an `Every` with `AtStart`.
+- **A run that is still going when the next is due is skipped and logged, never queued** (`bites: job skipped: its last run is still going`), and a time that passed while the machine was suspended or the clock stepped forward is skipped and logged too, never made up in a burst or run late. A clock set back never repeats a run. An error is logged at Warn and a panic at Error, and the schedule goes on.
+- **`Lock` makes one instance of several run each time.** Pass the same store to every instance: `bites.NewMemoryJobLock()` is the one of a single process (tests, and the apps of one process), and a module for Redis or Postgres is the one for several machines. Each time is claimed with the key `daily-report@<unix seconds>`, held for an hour and never released, so an instance whose clock is a few milliseconds behind cannot run a time the first has already finished; the instance that did not win logs it at Debug. A store that fails, panics or does not answer in ten seconds skips that time on that instance and logs it at Error: **the job is never run unlocked in its place**, and the next time asks again.
+- **A lock is at most once, not exactly once.** An instance that claims a time and then crashes loses it, and a store that is down skips it on every instance; a job longer than the time to its next run can overlap itself across instances. When it must happen exactly once, make the job safe to run twice and key the write on `bites.ScheduledAt(ctx)`, the time the run was due (an `INSERT ... ON CONFLICT DO NOTHING` of it, or a row lock): the same value on every instance and on a retry, whatever the clock says. When a missed run is worse than a double one, give no lock and make the job idempotent.
+- **Test it with `bitetest.Clock`.** Start the app with `bitetest.Start`, advance the clock to the time and wait for the job; two apps that share one `NewMemoryJobLock` are two instances racing for a time. `bitetest.NewClock` reads 2026-01-01 00:00 UTC, and a job set for a later time is reached by `Advance`.
 
 ## Health, readiness and the shutdown delay
 

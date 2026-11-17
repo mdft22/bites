@@ -362,7 +362,19 @@ _Avoid_: component, lifecycle hook, plugin, daemon
 
 **Worker**:
 A Service that runs one function on its own goroutine for the life of the app, made with `bites.Worker`; `bites.Every` makes the one that calls a function once per interval on the app's clock. Neither is restarted when it fails.
-_Avoid_: daemon, background job, cron
+_Avoid_: daemon, background job
+
+**Cron job**:
+A Service made with `bites.Cron` that calls a function at the times of a cron spec read in a time zone the application names, on the app's clock; `bites.Every` is the one for an interval. A time of day is run once through the nights the zone's offset changes, and a run that is still going or a time that passed in a pause is skipped and logged ([ADR 0092](docs/adr/0092-a-cron-schedule-is-a-service-read-in-a-given-zone-and-a-job-lock-lets-one-instance-run-each-occurrence.md)).
+_Avoid_: scheduler, timer, task
+
+**Occurrence**:
+One time a Cron job is due, named by its due instant: `ScheduledAt(ctx)` inside a run, and the key a Job lock claims (`name@<Unix seconds>`).
+_Avoid_: tick, firing, execution
+
+**Job lock**:
+A `JobLock` with one method, `Claim`, that says whether this instance is the one to run an occurrence: held for its ttl and never released, so at most one run for each occurrence across instances, and a store that fails skips it. It is not a lease, so a job that must happen exactly once is made safe to run twice. `bites.NewMemoryJobLock` is the one of a process, and `bitetest.TestJobLock` holds another to the interface.
+_Avoid_: mutex, distributed lock, lease
 
 **Topic**:
 A set of Sockets that one published message reaches, framed once. Made with `NewTopic` and a Broker it reaches the Sockets of every instance of the application.
@@ -373,11 +385,11 @@ A family of Topics named by a key known only at run time (a room per id, the fra
 _Avoid_: topic map, room registry, topic per user
 
 **Broker**:
-What carries a Topic's messages between the instances of an application ([ADR 0081](docs/adr/0081-a-topic-reaches-other-instances-through-a-broker-and-postgres-is-a-module.md)): an interface of the core that a module (`pgnotify` for Postgres `LISTEN`/`NOTIFY`) or `bitetest.Broker` implements. It delivers a message to every instance, the publisher's included.
+What carries a Topic's messages between the instances of an application ([ADR 0081](docs/adr/0081-a-topic-reaches-other-instances-through-a-broker-and-postgres-is-a-module.md)): an interface of the core that a module (`pgnotify` for Postgres `LISTEN`/`NOTIFY`, `natsbroker` for core NATS, [ADR 0094](docs/adr/0094-a-nats-broker-is-a-module-with-at-most-once-delivery-and-a-name-is-its-subject.md)) or `bitetest.Broker` implements. It delivers a message to every instance, the publisher's included.
 _Avoid_: bus, pubsub, message queue, hub
 
 **Conformance suite**:
-A function of `bitetest` (`TestRateLimitStore`, `TestSessionStore`, `TestOwnerSessionStore`, `TestIdempotencyStore`, `TestBroker`) that a store's or a Broker's own test calls to hold it to the promises of its interface's doc comment, one subtest each ([ADR 0086](docs/adr/0086-a-store-is-held-to-its-interface-by-a-conformance-suite-in-bitetest.md)).
+A function of `bitetest` (`TestRateLimitStore`, `TestSessionStore`, `TestOwnerSessionStore`, `TestIdempotencyStore`, `TestBroker`, `TestJobLock`) that a store's or a Broker's own test calls to hold it to the promises of its interface's doc comment, one subtest each ([ADR 0086](docs/adr/0086-a-store-is-held-to-its-interface-by-a-conformance-suite-in-bitetest.md)).
 _Avoid_: contract test, compliance test, TCK
 
 **Gap**:

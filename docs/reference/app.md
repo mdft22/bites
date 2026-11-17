@@ -639,7 +639,7 @@ Every returns a [`Service`](#service) that calls `fn` once every `interval` for 
 
 Calls are serial: `fn` never runs twice at once. A call that takes longer than `interval` delays the next until it returns, and the ticks it missed are dropped, not run in a burst: the next call is at the next multiple of `interval` after the first due time that is still ahead, and the log says at Warn (`bites: job took longer than its interval, the missed ticks are dropped`, with `job`, `interval` and `skipped`) how many were skipped. `fn`'s `ctx` is the Service's life, cancelled before `Stop`, which waits for a call in progress to return.
 
-An error from `fn` is logged at Warn (`bites: job failed, trying again at the next tick`, with `job` and `err`) and the loop goes on. A panic in `fn` is recovered, logged at Error with its stack, and the loop goes on. There is no jitter option and no cron expression.
+An error from `fn` is logged at Warn (`bites: job failed, trying again at the next tick`, with `job` and `err`) and the loop goes on. A panic in `fn` is recovered, logged at Error with its stack, and the loop goes on. There is no jitter option; a schedule at a clock time is [`Cron`](#cron).
 
 It panics at the call, naming the line, for a name that is empty or has a space, a quote or a control character, for a nil `fn` (`bites.Every("purge"): fn is nil: give the function called once every interval`), for an interval of zero or less (`bites.Every("purge"): the interval 0 is not a time between calls: give a positive duration, such as time.Minute`), and when more than one options value is given (`bites.Every("purge"): 2 options values were given; give one EveryOptions`).
 
@@ -684,6 +684,130 @@ func (*Cache) Refresh(context.Context) error { return nil }
 ```
 
 Guide: [deploying](../guide/deploying.md#periodic-work-and-a-background-worker), [testing](../guide/testing.md#testing-a-service). Decision: [ADR 0079](../adr/0079-services-start-after-the-app-binds-and-stop-in-reverse-around-shutdown.md).
+
+### `Cron`
+
+```go
+func Cron(name, spec string, loc *time.Location, fn func(ctx context.Context) error, opts ...CronOptions) Service
+```
+
+Cron returns a [`Service`](#service) that calls `fn` at the times a cron expression names, read in the time zone `loc`, for the life of the app, on the app's clock (`WithClock`, `bitetest.Clock`), so a test moves time instead of waiting. Register the result with [`App.Service`](#appservice).
+
+`spec` is the five fields of cron, minute hour day-of-month month day-of-week, or one of the shortcuts `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight` and `@hourly`. A field is `*`, a number, a range `a-b`, a list `a,b,c` of those, or `*` or a range with a step (`*/15`, `10-40/10`); months and days of the week may be three-letter names (`jan`, `mon`) and `0` and `7` are both Sunday. When both the day of month and the day of week name days (neither starts with `*`), a day matches either, as in Vixie cron; when one is `*` the day must match both. There are no seconds and no `?`, `L`, `W` or `#`, and no `@every`: an interval is [`Every`](#every). `loc` is required: give `time.UTC` or the result of `time.LoadLocation`, never `nil` and not `time.Local`, because a schedule read in the machine's zone is a different schedule on another machine.
+
+A spec that names hours is a time of day and runs once on each calendar day, through the nights the zone's offset changes: a time that does not exist when the clocks go forward runs once, at the first instant after the gap (`30 2 * * *` on the day 02:00 becomes 03:00 runs at 03:00), and a time that occurs twice when they go back runs once, at its first occurrence. A spec that has every hour set (`@hourly`, `*/15 * * * *`) follows the clock instead: a time that does not exist is not run, and one that occurs twice runs twice.
+
+There is no run at start: the first occurrence is the first time after the app started serving, and `bites: job scheduled` at Info says when, in the zone, with `job`, `spec`, `zone`, `next` and `lock`. Runs are serial. An occurrence that comes due while the last run is still going is skipped and logged at Warn when it comes due (`bites: job skipped: its last run is still going`, with `job`, `due` and `dropped`), never queued. A run starts at its due time or within a minute after it; an occurrence whose timer fired later than that (a suspended machine, a stopped container, a clock stepped forward) is skipped and logged at Warn (`bites: job skipped: its time passed while the clock jumped or the process was paused`, with `late`, `grace` and `dropped`), and the times after a pause are never made up in a burst. A clock set back never repeats an occurrence that was run: the job logs `bites: the clock went back before a job's time, it waits for the clock to reach it` and waits.
+
+An error from `fn` is logged at Warn (`bites: job failed, trying again at its next time`, with `job`, `due` and `err`) and a panic is recovered and logged at Error with its stack, and the schedule goes on. `fn`'s `ctx` is the Service's life with [`ScheduledAt`](#scheduledat); `Stop` cancels it and waits for a run in progress, bounded as every Service function is.
+
+It panics at the call, naming the line, for a name that is empty or has a space, a quote or a control character, for a nil `fn`, for a nil `loc` and `time.Local`, for a `spec` that is not a schedule (the message quotes the spec, names the field and says what to write: `bites.Cron("report"): spec "0 25 * * *" is not a schedule: hour "25": 25 is outside 0-23`) or never matches a date (the 31st of February), and when more than one options value is given.
+
+Allocations: none on the request path ([ADR 0003](../adr/0003-the-trade-budget.md)).
+
+<!-- compiles: decls -->
+
+```go
+func registerReport(app *bites.App, lock bites.JobLock) error {
+	jakarta, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		return err
+	}
+	app.Service(bites.Cron("daily-report", "30 2 * * *", jakarta, func(ctx context.Context) error {
+		bites.Logger(ctx).Info("building the report", "for", bites.ScheduledAt(ctx))
+		return nil
+	}, bites.CronOptions{Lock: lock}))
+	return nil
+}
+```
+
+Guide: [deploying](../guide/deploying.md#a-schedule-at-a-time-of-day-and-one-instance-of-several). Decision: [ADR 0092](../adr/0092-a-cron-schedule-is-a-service-read-in-a-given-zone-and-a-job-lock-lets-one-instance-run-each-occurrence.md).
+
+### `CronOptions`
+
+```go
+type CronOptions struct {
+	Lock JobLock
+}
+```
+
+CronOptions configures [`Cron`](#cron). The zero value is valid: the job runs on every instance of the app.
+
+`Lock`, when not nil, makes the job run on one instance of several: before each occurrence the job claims it in the [`JobLock`](#joblock), with the key `name@<due in Unix seconds>`, and runs it only when the claim is its own. It must be the same store on every instance, and the job's name is its identity in it. A store that errors or panics, or does not answer in ten seconds, skips the occurrence and logs it at Error (`bites: job skipped: the lock store failed, so this occurrence is not run here`, with `job`, `due`, `key` and `err`); the job is never run unlocked in its place, and the next occurrence asks again. An occurrence another instance claimed is logged at Debug. `nil` (the zero value) is no lock: every instance runs every occurrence, and the start-up line says `lock=none`.
+
+It is at most one run for each occurrence, not exactly one: an instance that claims and then crashes loses the occurrence, and a job longer than the time to its next occurrence can overlap itself across instances. When exactly once matters, make the job safe to run twice, keyed on [`ScheduledAt`](#scheduledat).
+
+<!-- compiles: decls -->
+
+```go
+func registerLocked(app *bites.App) {
+	lock := bites.NewMemoryJobLock() // one process; a module's store for several instances
+	app.Service(bites.Cron("purge", "@hourly", time.UTC, func(context.Context) error { return nil }, bites.CronOptions{Lock: lock}))
+}
+```
+
+Guide: [deploying](../guide/deploying.md#a-schedule-at-a-time-of-day-and-one-instance-of-several). Decision: [ADR 0092](../adr/0092-a-cron-schedule-is-a-service-read-in-a-given-zone-and-a-job-lock-lets-one-instance-run-each-occurrence.md).
+
+### `ScheduledAt`
+
+```go
+func ScheduledAt(ctx context.Context) time.Time
+```
+
+ScheduledAt is the time a [`Cron`](#cron) run was due, the occurrence the run belongs to, or the zero time when `ctx` is not the `ctx` of a Cron job. It is the schedule's time and not the clock's: a run that starts a few milliseconds late, or a minute late at most, has the `ScheduledAt` its due time says. It is in UTC; call `In` for the job's zone. It is the value to key an idempotent write on, which is how a job is made safe to run twice.
+
+Guide: [deploying](../guide/deploying.md#a-schedule-at-a-time-of-day-and-one-instance-of-several). Decision: [ADR 0092](../adr/0092-a-cron-schedule-is-a-service-read-in-a-given-zone-and-a-job-lock-lets-one-instance-run-each-occurrence.md).
+
+### `JobLock`
+
+```go
+type JobLock interface {
+	Claim(ctx context.Context, key string, ttl time.Duration) (bool, error)
+}
+```
+
+JobLock lets one instance of several run each occurrence of a [`Cron`](#cron) job. `Claim` reports whether the caller is the one to run `key`, which names an occurrence; `ttl` is how long the claim is kept and is always positive. It is the interface a Redis or Postgres module implements, and [`bitetest.TestJobLock`](./bitetest.md#bitetesttestjoblock) holds an implementation to what follows.
+
+- `Claim` answers true to exactly one caller of a key, across every instance that shares the store, and false to every other until `ttl` has passed. Two callers at the same moment never both get true.
+- A key that was claimed stays claimed for the whole `ttl`: nothing releases it, not even the end of the run, so an instance whose clock is a few milliseconds behind cannot run the occurrence again after the first has finished.
+- After `ttl` the key can be claimed again. `ttl` is judged on [`Now(ctx)`](#now), the app's clock and not the store's own: a store records the end of a claim as `Now(ctx)` plus `ttl`.
+- A key is any text, of the length the store can hold; two keys that differ in one byte are two keys.
+- A refusal because another instance holds the key is `(false, nil)`, not an error. An error means the store could not decide (it is down, `ctx` is done): the answer is then "not claimed" and the job is skipped, whatever the first result was.
+- When `ctx` is done, `Claim` returns its error and claims nothing.
+
+A claim is not a lease: it says who starts an occurrence, not who is still running it, and there is no release, renewal or fencing token. Guide: [deploying](../guide/deploying.md#a-schedule-at-a-time-of-day-and-one-instance-of-several), [testing](../guide/testing.md#testing-a-store-you-wrote). Decision: [ADR 0092](../adr/0092-a-cron-schedule-is-a-service-read-in-a-given-zone-and-a-job-lock-lets-one-instance-run-each-occurrence.md).
+
+### `JobLock.Claim`
+
+```go
+Claim(ctx context.Context, key string, ttl time.Duration) (bool, error)
+```
+
+Claim reports whether the caller is the one to run `key`; see [`JobLock`](#joblock) for what an implementation promises.
+
+### `MemoryJobLock`
+
+```go
+type MemoryJobLock struct{ /* unexported */ }
+```
+
+MemoryJobLock is the [`JobLock`](#joblock) of one process: the instances are the Apps that share it, which is what a test of two instances racing needs. It judges `ttl` on `Now(ctx)`, so a test moves it with the app's clock, frees the expired claims as it goes, and is safe for concurrent use. The zero value is not usable; use [`NewMemoryJobLock`](#newmemoryjoblock).
+
+### `NewMemoryJobLock`
+
+```go
+func NewMemoryJobLock() *MemoryJobLock
+```
+
+NewMemoryJobLock returns an empty [`MemoryJobLock`](#memoryjoblock). It keeps one entry for each claim that has not expired, so its size is the claims inside one `ttl`.
+
+### `MemoryJobLock.Claim`
+
+```go
+func (l *MemoryJobLock) Claim(ctx context.Context, key string, ttl time.Duration) (bool, error)
+```
+
+Claim implements [`JobLock`](#joblock). A `ttl` that is not positive is an error, `bites: MemoryJobLock.Claim: ttl is not positive: give how long the claim is kept`.
 
 ### `App.Shutdown`
 

@@ -793,3 +793,12 @@ func TestBroker(t *testing.T, s BrokerSuite)
 
 TestBroker checks a [`bites.Broker`](./websocket.md#broker): `Accepts` is nil for a name it carries and an error for one it cannot; a Publish reaches a subscription on a peer and on the publishing Broker, every subscription exactly once; one publisher's payloads arrive in the order of its calls, and two publishers at once lose nothing; names are separate streams; each payload given to `deliver` is its own bytes, unchanged when the publisher reuses its slice, when a subscriber writes on its copy and when later payloads arrive; `stop` ends its subscription and no other; and the payload limit is an error that names it and sends nothing. The payloads are JSON, as a Topic's are, so a Broker that carries only text is checked fairly. A `gap` is not tested, since the suite cannot make a Broker lose its connection.
 
+### `bitetest.TestJobLock`
+
+```go
+func TestJobLock(t *testing.T, newLock func(t *testing.T) bites.JobLock)
+```
+
+TestJobLock checks a [`bites.JobLock`](./app.md#joblock): a key nobody holds is claimed, a held key is refused with `(false, nil)`, a claim holds until its `ttl` has passed and no longer, nothing releases it before then, each claim has the `ttl` it was made with, keys never share a claim (case and a trailing space included), any text is a key (Unicode, punctuation and 200 bytes), a done context claims nothing and returns its error, and `Claim` is atomic for a key under concurrent callers (60 rounds of 8 callers, exactly one of them claiming). The `ttl` is judged on `bites.Now(ctx)`: the suite gives every call a context of an app on a `bitetest.Clock` and moves it with `Advance`, so it never sleeps and a store that reads its own clock fails at once. A nil `newLock` fails the test.
+
+Guide: [testing](../guide/testing.md#testing-a-store-you-wrote). Decision: [ADR 0092](../adr/0092-a-cron-schedule-is-a-service-read-in-a-given-zone-and-a-job-lock-lets-one-instance-run-each-occurrence.md), [ADR 0086](../adr/0086-a-store-is-held-to-its-interface-by-a-conformance-suite-in-bitetest.md).
