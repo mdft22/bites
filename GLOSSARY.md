@@ -20,6 +20,10 @@ _Avoid_: binding, source, tag
 `CSV[T]`, a list a client sends as one comma-separated value (`?stage=won,lost`), read in a Query or a Header; a plain slice is filled from repeated keys, and an element of a CSV cannot contain a comma.
 _Avoid_: delimited list, split list
 
+**Query map**:
+A `map[K]V` field of a Query, read as `?filter[name]=x&filter[age]=3` (the OpenAPI `deepObject` style); a key type with `Values` lists the keys allowed, a member sent twice is a 400, and the number of members is bounded by `Members` or `MaxFields`.
+_Avoid_: deep object, bracket syntax, nested query
+
 **Date**:
 `Date`, a calendar date with no time of day and no zone, read and written as `YYYY-MM-DD` and described as `format: date`; it has no instant, so it has no `Time` method and `In(loc)` names the zone.
 _Avoid_: civil date type, date-only time

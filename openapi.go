@@ -1126,7 +1126,13 @@ func (a *App) parameters(reg *openapi.Registry, s *textSection, in string) ([]an
 	out := make([]any, 0, len(s.fields))
 	for _, f := range s.fields {
 		var schema any
-		if f.list >= 0 || f.csv {
+		if f.mapT != nil {
+			ms, err := a.mapSchema(reg, &f)
+			if err != nil {
+				return nil, err
+			}
+			schema = ms
+		} else if f.list >= 0 || f.csv {
 			// A CSV is an array in the document whatever its wire form: the style says how it is sent.
 			items, err := a.textSchema(reg, f.typ.Elem())
 			if err != nil {
@@ -1151,6 +1157,10 @@ func (a *App) parameters(reg *openapi.Registry, s *textSection, in string) ([]an
 			schema = withDefault(schema, f)
 		}
 		p := map[string]any{"name": f.wire, "in": in, "required": f.required || in == "path", "schema": schema}
+		if f.mapT != nil {
+			// The members are sent as filter[name]=x, one pair each (OpenAPI deepObject).
+			p["style"], p["explode"] = "deepObject", true
+		}
 		if f.csv {
 			// A header's array is always simple and comma-separated; the style names it for a query only.
 			if in == "query" {
@@ -1168,6 +1178,29 @@ func (a *App) parameters(reg *openapi.Registry, s *textSection, in string) ([]an
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// mapSchema is the schema of a map in a Query: an object whose members are V, with the key's own
+// schema as propertyNames when the key type says more than "a string" (a Values method lists the
+// keys that are allowed), and the bound on the number of members (ADR 0042).
+func (a *App) mapSchema(reg *openapi.Registry, f *textField) (map[string]any, error) {
+	vs, err := a.textSchema(reg, f.valT)
+	if err != nil {
+		return nil, err
+	}
+	s := map[string]any{"type": "object", "additionalProperties": vs}
+	if f.keyT != reflect.TypeFor[string]() {
+		ks, err := a.textSchema(reg, f.keyT)
+		if err != nil {
+			return nil, err
+		}
+		s["propertyNames"] = ks
+	}
+	if f.members.Min > 0 {
+		s["minProperties"] = f.members.Min
+	}
+	s["maxProperties"] = f.members.Max
+	return s, nil
 }
 
 // withDefault is schema with the field's default beside its type (ADR 0041), in the JSON type the

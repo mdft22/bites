@@ -109,7 +109,7 @@ A value converts back to a plain Go value where you need one: `string(in.Body.Na
 
 ## Reading a query parameter
 
-**A Query field is read from the query string by its wire name, and a key the Input does not name is ignored unless you ask for it to be refused.** A repeated key fills a list: `?coupon=a&coupon=b` gives `Coupon` two values. A comma is not a separator, because values contain commas ([ADR 0042](../adr/0042-text-values-are-decoded-by-type.md)). An API that already sends `?stage=won,lost` makes the field a [`CSV`](#a-list-sent-as-one-comma-separated-value) instead.
+**A Query field is read from the query string by its wire name, and a key the Input does not name is ignored unless you ask for it to be refused.** A repeated key fills a list: `?coupon=a&coupon=b` gives `Coupon` two values. A comma is not a separator, because values contain commas ([ADR 0042](../adr/0042-text-values-are-decoded-by-type.md)). An API that already sends `?stage=won,lost` makes the field a [`CSV`](#a-list-sent-as-one-comma-separated-value) instead, and `?filter[name]=x&filter[age]=3` is a [map](#a-map-in-the-query).
 
 **An ignored key hides a misspelled filter.** `?knid=government` against a `Kind` field returns every row, and the answer looks exactly like a filter that worked. [`RejectUnknownQueryKeys()`](../reference/input.md#rejectunknownquerykeys) on a route or a group, or [`WithRejectUnknownQueryKeys()`](../reference/app.md#withrejectunknownquerykeys) for the whole app, makes each such key a 400 located `query.knid` with the sentence `unknown query parameter` and what the route takes (`; did you mean "kind"?; this route takes kind, page, tags`: the nearest declared key when one is close, then the declared keys), and [`AcceptUnknownQueryKeys()`](../reference/input.md#acceptunknownquerykeys) takes one route back out (a link shortener adds parameters to URLs your API did not ask for). The app-wide switch holds a route with no `Query` section too: it takes no query at all. The default stays lenient because the parameters a proxy or an analytics tag adds would otherwise break working clients ([ADR 0042](../adr/0042-text-values-are-decoded-by-type.md)).
 
@@ -170,6 +170,30 @@ type ListDeals struct {
 Each element is decoded by `T` with its rules, so `?stage=won,bogus` is a 400 at `query.stage[1]` with `expected one of: won, lost, open`. `?stage=` is an empty list, an empty element (`won,,lost`) is decoded as the empty string and refused by a type that does not accept it, and `?stage=won&stage=lost` is a 400 `sent more than once`: one wire form per field. The API document says `type: array`, `style: form`, `explode: false`.
 
 **The price is that an element cannot contain a comma**, because nothing escapes it; if a value can, keep the repeated-key slice. `CSV` is refused in `Path`, `Cookie`, a `Form` and a JSON body, where a list is an array. In a `Header` it reads one line, `X-Ids: 1, 2, 3`, trimming the spaces. To bound the count, name the type and repeat the marker: `type Stages bites.CSV[Stage]` with `CommaSeparated()` and `Items() (min, max int)` methods.
+
+## A map in the query
+
+**A `map[string]V` in the `Query` reads the `deepObject` style, for an API that filters by fields the client chooses.** The key goes in brackets after the field's wire name, and the handler ranges over the map:
+
+<!-- compiles: decls -->
+```go
+type FilterKey string
+
+func (FilterKey) Values() []FilterKey { return []FilterKey{"name", "status", "owner"} }
+
+type ListAccounts struct {
+	Query struct {
+		Filter bites.Opt[map[FilterKey]string]
+		Facet  map[string]int
+	}
+}
+```
+
+`?filter[name]=acme&filter[status]=open&facet[size]=3` fills both. A key type with a `Values` method lists the keys that are allowed, so `filter[nmae]=x` is a 400 at `query.filter[nmae]` saying `expected one of: name, status, owner`; a plain `string` key accepts any key, and `Length`, `Pattern` and `Check` on the key type narrow it as they do a value. The value is decoded by its own type with its own rules, and a bad one is located at its member, `query.facet[size]`. `%5B` and `%5D` are the same brackets, as a browser form and `axios` send them. The API document says `style: deepObject`, `explode: true` and an object whose `additionalProperties` is the value's schema.
+
+**The map is held to a bound.** Without one it takes at most `Limits.MaxFields` members (100), counted before the map is made; over it is one 400 at `query.filter`. To say your own number, name the type and give it `Members() (min, max int)`, the method a JSON object has. A map nobody sent is a 400 `required` unless it is an `Opt`, and it has no default.
+
+**A mistake in the brackets is a 400 that says what to send**, never an ignored key: `filter=x`, `filter[`, `filter[]` and `filter[a]b` answer `expected the form filter[key]`, and `filter[a][b]` answers `nested keys are not supported`. A member sent twice is a 400 `sent more than once`. A key cannot contain `[` or `]`, because nothing escapes them. A map is refused in `Path`, `Header`, `Cookie` and a `Form`, and its value cannot be a list, an `Opt` or a struct; for keys you know in advance, each with its own type, write fields and name them with `WireNames`, `"Name": "filter[name]"`. A map costs 4 allocations a request, 6 from the ninth member, and a route without one costs what it did ([ADR 0042](../adr/0042-text-values-are-decoded-by-type.md)).
 
 ## Marking a field optional, nullable or both
 

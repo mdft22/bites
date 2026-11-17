@@ -24,7 +24,7 @@ func newApp() *bites.App {
 | Field | Default | When it is passed |
 |---|---|---|
 | `MaxHead` | 8 KiB | the request head is answered 431 |
-| `MaxFields` | 100 | more header fields are a 431; more fields of a `Form` body are a 413 |
+| `MaxFields` | 100 | more header fields are a 431; more fields of a `Form` body are a 413; more members of a map in a `Query` (without a `Members` method) are a 400 |
 | `MaxBody` | 1 MiB, per route | a 413 |
 | `HeadTimeout` | 10 s | the connection is closed |
 | `BodyTimeout` | 30 s, per route (longer for a `MaxBody` over 3.75 MiB) | a 408 |

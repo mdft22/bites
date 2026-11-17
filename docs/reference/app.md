@@ -958,7 +958,7 @@ Options bundles several options into one, applied in the order given, so an appl
 ```go
 type Limits struct {
 	MaxHead      int           // request head, 8 KiB; over it is a 431
-	MaxFields    int           // header or Form fields, 100; over it is a 431 (413 for a Form)
+	MaxFields    int           // header or Form fields, or members of a Query map, 100; over it is a 431 (413 for a Form, 400 for a map)
 	MaxBody      int64         // request body per route, 1 MiB; over it is a 413
 	HeadTimeout  time.Duration // time to read a head, 10 s
 	BodyTimeout  time.Duration // time to read a body per route, 30 s; over it is a 408
@@ -989,7 +989,7 @@ Limits are the limits of ADR 0024 that the app has. A zero field takes its defau
 | Field | Default | When exceeded |
 |---|---|---|
 | `MaxHead` | 8 KiB | 431 |
-| `MaxFields` | 100 | 431 for header fields, 413 for the fields of a `Form[T]` |
+| `MaxFields` | 100 | 431 for header fields, 413 for the fields of a `Form[T]`, 400 for the members of a map in a `Query` with no `Members` method |
 | `MaxBody` | 1 MiB | 413 |
 | `HeadTimeout` | 10 s | connection closed |
 | `BodyTimeout` | 30 s | 408, connection closed |

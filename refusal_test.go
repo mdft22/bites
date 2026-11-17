@@ -323,7 +323,7 @@ type (
 		Query struct{ Page bites.Opt[bites.Null[int]] }
 	}
 	MapQuery struct {
-		Query struct{ Filter map[string]string }
+		Query struct{ Filter map[int]string }
 	}
 	StructQuery struct {
 		Query struct{ Range struct{ From, To int } }
@@ -809,8 +809,28 @@ func TestEveryMistakeIsRefusedAtRegistrationWithTheMessageWrittenForIt(t *testin
 			"GET /x: NullQuery.Query.Page is a Null; text has no null, so the type would promise a state no request can produce: use Opt[T] for a value that may be missing", false},
 		{"an Opt of Null in Query", func(a *bites.App) { here(); a.Get("/x", ok[OptNullQuery]) },
 			"GET /x: OptNullQuery.Query.Page: an Opt of Null[int] is not allowed in a text section; text has no null", false},
-		{"a map in Query", func(a *bites.App) { here(); a.Get("/x", ok[MapQuery]) },
-			"GET /x: MapQuery.Query.Filter: map[string]string is a map; text holds one scalar, give it an UnmarshalText method or use a type of its own", false},
+		{"a map in Query whose key is not a string", func(a *bites.App) { here(); a.Get("/x", ok[MapQuery]) },
+			"GET /x: MapQuery.Query.Filter: the key of a map in a Query is a string, because it is the text a client writes in the brackets, and int is not: use map[string]string", false},
+		{"a map in Path", func(a *bites.App) { here(); a.Get("/x/{id}", ok[MapPath]) },
+			"GET /x/{id}: MapPath.Path.ID is a map, which only a Query section reads, as ?id[key]=value; a Path holds one value for each name, so give each key its own field", false},
+		{"a map in Header", func(a *bites.App) { here(); a.Get("/x", ok[MapHeader]) },
+			"GET /x: MapHeader.Header.XFilter is a map, which only a Query section reads, as ?x_filter[key]=value; a Header holds one value for each name, so give each key its own field", false},
+		{"a map in Cookie", func(a *bites.App) { here(); a.Get("/x", ok[MapCookie]) },
+			"GET /x: MapCookie.Cookie.Filter is a map, which only a Query section reads, as ?filter[key]=value; a Cookie holds one value for each name, so give each key its own field", false},
+		{"a map in a Form", func(a *bites.App) { here(); a.Post("/x", ok[MapForm]) },
+			"POST /x: MapForm.Body.Filter is a map, which only a Query section reads, as ?filter[key]=value; a Form holds one value for each name, so give each key its own field", false},
+		{"a map of Opt in Query", func(a *bites.App) { here(); a.Get("/x", ok[MapOfOpt]) },
+			"GET /x: MapOfOpt.Query.Filter: a map value cannot be Opt[int], absence means nothing there", false},
+		{"a map of lists in Query", func(a *bites.App) { here(); a.Get("/x", ok[MapOfList]) },
+			"GET /x: MapOfList.Query.Filter: a map in a Query holds one value for each key, and []string is a slice; a key sent twice is a 400, so there is no list under a key", false},
+		{"a map of structs in Query", func(a *bites.App) { here(); a.Get("/x", ok[MapOfStruct]) },
+			"GET /x: MapOfStruct.Query.Filter: struct { A int } is a struct; text holds one scalar, give it an UnmarshalText method or use a type of its own", false},
+		{"a map with a default", func(a *bites.App) { here(); a.Get("/x", ok[MapDefault]) },
+			"GET /x: MapDefault.Query.Filter is a map and has a default: a default would be one map shared by every request or a copy made for each, so a map has none", false},
+		{"an Items method on a map in Query", func(a *bites.App) { here(); a.Get("/x", ok[MapItems]) },
+			"GET /x: MapItems.Query.Filter: bites_test.mapItems has an Items method, but Items bounds a list and bites_test.mapItems is a map: a map's size is its Members method, func() (min, max int)", false},
+		{"more maps than a Query holds", func(a *bites.App) { here(); a.Get("/x", ok[MapTooMany]) },
+			"GET /x: MapTooMany.Query: a Query can hold at most 4 maps", false},
 		{"a struct in Query", func(a *bites.App) { here(); a.Get("/x", ok[StructQuery]) },
 			"GET /x: StructQuery.Query.Range: struct { From int; To int } is a struct; text holds one scalar, give it an UnmarshalText method or use a type of its own", false},
 		{"an Opt in Path", func(a *bites.App) { here(); a.Get("/x/{id}", ok[OptPath]) },

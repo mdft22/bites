@@ -4,6 +4,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/nevindra/bites/internal/jsoncodec"
@@ -18,6 +19,7 @@ import (
 const (
 	maxSectionFields = 64 // the seen-mask of a section is one machine word
 	maxLists         = 8  // lists in one text section, counted on the stack while decoding
+	maxMaps          = 4  // maps (deepObject) in one Query section
 )
 
 type secKind uint8
@@ -54,9 +56,11 @@ type textField struct {
 	hasDef   bool          // the section's Defaults names this field (ADR 0041)
 	def      string        // the default as a client would send it, decoded again on each request that omits the field
 	defVal   reflect.Value // the default decoded once at Registration, for the API description only
+	mapField               // a map in a Query: the members of a deepObject (ADR 0042); zero for any other field
 }
 
 type textSection struct {
+	maps    int // the Query's map fields (deepObject), counted and filled in two passes
 	kind    secKind
 	off     uintptr // of the section inside the Input
 	fields  []textField
@@ -511,6 +515,13 @@ func (c *compiler) section(kind secKind, goPath string, t reflect.Type, off uint
 				tf.list = s.lists
 				s.lists++
 			}
+			if tf.mapT != nil {
+				if s.maps == maxMaps {
+					return refusalf("%s: a Query can hold at most %d maps", goPath, maxMaps)
+				}
+				tf.mapIdx = s.maps
+				s.maps++
+			}
 			if len(s.fields) == maxSectionFields {
 				return refusalf("%s has more than %d fields", goPath, maxSectionFields)
 			}
@@ -613,6 +624,8 @@ func sectionDefaults(s *textSection) error {
 		switch {
 		case s.kind == secPath:
 			return refusalf("%s has a default, but a path parameter is always present", f.goPath)
+		case f.mapT != nil:
+			return refusalf("%s is a map and has a default: a default would be one map shared by every request or a copy made for each, so a map has none", f.goPath)
 		case f.list >= 0 || f.csv:
 			return refusalf("%s is a list and has a default: a list default would be one slice shared by every request or a copy made for each, so a list has none", f.goPath)
 		case !f.required:
@@ -685,6 +698,9 @@ func (c *compiler) textField(kind secKind, fpath string, t reflect.Type, off uin
 	}
 	if kind == secPath && pk == wire.Optional {
 		return tf, refusalf("%s is an Opt, but a path parameter is always present", fpath)
+	}
+	if inner.Kind() == reflect.Map && !implementsText(inner) {
+		return c.mapFieldOf(kind, tf, inner, pk, off, vOff, fOff)
 	}
 	if wire.CSVOf(inner) && !implementsText(inner) {
 		return c.csvField(kind, tf, inner, pk, off, vOff, fOff)
@@ -771,6 +787,56 @@ func (c *compiler) csvField(kind secKind, tf textField, t reflect.Type, pk wire.
 		return tf, refusalf("%s: %v", tf.goPath, err)
 	}
 	tf.dec, tf.sliceT, tf.elemSize, tf.typ, tf.csv = dec, t, et.Size(), t, true
+	tf.listOff = off
+	if pk == wire.Optional {
+		tf.listOff, tf.flagOff, tf.hasFlag = off+vOff, off+fOff, true
+	}
+	return tf, nil
+}
+
+// mapFieldOf compiles a map in a Query, the members of a deepObject: `filter[name]=x&filter[age]=3`
+// fills map[string]V (ADR 0042). The key is decoded by the key type's own text decoding, so a key type
+// with Values lists the keys that are allowed, and the value by V's, as any text value is.
+func (c *compiler) mapFieldOf(kind secKind, tf textField, t reflect.Type, pk wire.PresenceKind, off, vOff, fOff uintptr) (textField, error) {
+	if kind != secQuery {
+		where := map[secKind]string{secPath: "Path", secHeader: "Header", secCookie: "Cookie", secForm: "Form", secMultipart: "Multipart"}[kind]
+		return tf, refusalf("%s is a map, which only a Query section reads, as ?%s[key]=value; a %s holds one value for each name, so give each key its own field", tf.goPath, c.a.naming(lastName(tf.goPath)), where)
+	}
+	kt, vt := t.Key(), t.Elem()
+	if kt.Kind() != reflect.String {
+		return tf, refusalf("%s: the key of a map in a Query is a string, because it is the text a client writes in the brackets, and %s is not: use map[string]%s", tf.goPath, typeLabel(kt), typeLabel(vt))
+	}
+	if k, _, _, _ := wire.PresenceOf(vt); k != wire.None {
+		return tf, refusalf("%s: a map value cannot be %s, absence means nothing there", tf.goPath, typeLabel(vt))
+	}
+	if k := vt.Kind(); (k == reflect.Slice || k == reflect.Array) && !implementsText(vt) {
+		return tf, refusalf("%s: a map in a Query holds one value for each key, and %s is a %s; a key sent twice is a 400, so there is no list under a key", tf.goPath, typeLabel(vt), k)
+	}
+	keyDec, err := wire.CompileTextWith(kt, c.a.formats)
+	if err != nil {
+		return tf, refusalf("%s: the key: %v", tf.goPath, err)
+	}
+	dec, err := wire.CompileTextWith(vt, c.a.formats)
+	if err != nil {
+		return tf, refusalf("%s: %v", tf.goPath, err)
+	}
+	c.noteFormatless(vt, tf.goPath)
+	if _, _, err := wire.ItemsOf(t); err != nil {
+		return tf, refusalf("%s: %v", tf.goPath, err)
+	}
+	mem, has, err := wire.MembersOf(t)
+	if err != nil {
+		return tf, refusalf("%s: %v", tf.goPath, err)
+	}
+	if !has {
+		// The head is bounded already, but a client may fit a thousand short members in 8 KiB: the
+		// count is bounded by default, as every limit is (ADR 0024).
+		mem = wire.Members{Max: c.a.limits.MaxFields, Message: "must have at most " + strconv.Itoa(c.a.limits.MaxFields) + " members"}
+	}
+	pair := reflect.StructOf([]reflect.StructField{{Name: "K", Type: kt}, {Name: "V", Type: vt}})
+	tf.dec, tf.typ = dec, t
+	tf.mapT, tf.keyT, tf.valT, tf.keyDec, tf.members = t, kt, vt, keyDec, &mem
+	tf.pairT, tf.pairV = pair, pair.Field(1).Offset
 	tf.listOff = off
 	if pk == wire.Optional {
 		tf.listOff, tf.flagOff, tf.hasFlag = off+vOff, off+fOff, true

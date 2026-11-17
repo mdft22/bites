@@ -131,7 +131,7 @@ func decodePath(s *textSection, ps *router.Params, in unsafe.Pointer, slab *wire
 func decodeQuery(s *textSection, raw []byte, in unsafe.Pointer, slab *wire.Slab, errs *jsoncodec.Errors) {
 	r := textRun{sec: s, base: unsafe.Add(in, s.off), slab: slab, errs: errs}
 	for r.phase = 0; r.phase < 2; r.phase++ {
-		if r.phase == 0 && s.lists == 0 {
+		if r.phase == 0 && s.lists == 0 && s.maps == 0 {
 			continue
 		}
 		wire.EachQuery(raw, r.queryPair)
@@ -185,11 +185,16 @@ type textRun struct {
 	bad    uint8 // lists whose Items bound failed: their values are not stored
 	badEl  uint8 // lists with an item that did not decode, which Unique does not compare
 	data   [maxLists]unsafe.Pointer
+	mr     *mapRun // a Query's maps (ADR 0042), made at the first key of one
 }
 
 // offer hands the value raw to field idx. Percent-decoding goes into the slab, once.
 func (r *textRun) offer(idx int, raw []byte) {
 	f := &r.sec.fields[idx]
+	if f.mapT != nil {
+		r.mapBare(f, idx)
+		return
+	}
 	if f.list >= 0 && r.phase == 0 {
 		r.counts[f.list]++
 		return
@@ -355,12 +360,14 @@ func (r *textRun) queryPair(key, value []byte) bool {
 	var idx int
 	var ok bool
 	var name string
+	kb, inSlab := key, false
 	if bytes.IndexByte(key, '%') < 0 && bytes.IndexByte(key, '+') < 0 {
 		if idx, ok = r.sec.lookup(key); !ok && r.sec.strict && r.phase == 1 {
 			name = string(key)
 		}
 	} else if k, err := r.slab.Unescape(key, true); err == nil {
-		idx, ok = r.sec.lookup(unsafe.Slice(unsafe.StringData(k), len(k)))
+		kb, inSlab = unsafe.Slice(unsafe.StringData(k), len(k)), true
+		idx, ok = r.sec.lookup(kb)
 		name = k
 	} else if r.sec.strict && r.phase == 1 {
 		addError(r.errs, "query", msgEscape)
@@ -368,6 +375,8 @@ func (r *textRun) queryPair(key, value []byte) bool {
 	switch {
 	case ok:
 		r.offer(idx, value)
+	case r.sec.maps != 0 && r.mapPair(kb, inSlab, value):
+		// A member of a map, or a key meant for one and written wrongly (ADR 0042).
 	case r.sec.strict && r.phase == 1 && name != "" && !slices.Contains(r.sec.elsewhere, name):
 		// Reported in the second pass only, so a list's count pass does not report it twice.
 		// The key's name is the one thing echoed, cut to 64 bytes as a form's is (ADR 0012).

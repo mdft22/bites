@@ -183,6 +183,9 @@ func (s *textSection) unknownQueryMessage(key string) string {
 	if near, ok := nearestKey(key, s.keys); ok {
 		b.WriteString(`; did you mean "`)
 		b.WriteString(near)
+		if s.fields[s.byName[near]].mapT != nil {
+			b.WriteString("[key]")
+		}
 		b.WriteString(`"?`)
 	}
 	b.WriteString("; this route takes ")
@@ -197,6 +200,9 @@ func (s *textSection) unknownQueryMessage(key string) string {
 			b.WriteString(", ")
 		}
 		b.WriteString(k)
+		if s.fields[i].mapT != nil {
+			b.WriteString("[key]")
+		}
 	}
 	return b.String()
 }

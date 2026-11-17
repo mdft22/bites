@@ -43,7 +43,7 @@ var ErrServerClosed = engine.ErrServerClosed
 // The WebSocket limits are the last group (ADR 0037, ADR 0039, ADR 0046).
 type Limits struct {
 	MaxHead      int           // request head, 8 KiB; over it is a 431
-	MaxFields    int           // header or Form fields, 100; over it is a 431 (413 for a Form)
+	MaxFields    int           // header or Form fields, or members of a Query map, 100; over it is a 431 (413 for a Form, 400 for a map)
 	MaxBody      int64         // request body per route, 1 MiB; over it is a 413
 	HeadTimeout  time.Duration // time to read a head, 10 s
 	BodyTimeout  time.Duration // time to read a body per route, 30 s; over it is a 408
