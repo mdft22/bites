@@ -92,6 +92,9 @@ func (p *inputPlan) decode(a *App, ex *engine.Exchange, ps *router.Params, in un
 	}
 	if s := p.header; s != nil {
 		decodeHeaders(s, head, in, slab, errs)
+		if p.ifMatch != nil {
+			p.armIfMatch(in, slab)
+		}
 	}
 	if s := p.cookie; s != nil {
 		decodeCookies(s, head, in, slab, errs)

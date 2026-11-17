@@ -58,6 +58,7 @@ Content-Type: application/json
 | [`Accepted[T]`](../reference/responses.md#accepted) | 202 | `Body` |
 | [`NoContent`](../reference/responses.md#nocontent) | 204 | none, no body |
 | [`NotModified`](../reference/responses.md#notmodified) | 304 | none, no body; put the `ETag` in `Header` |
+| [`Tagged[T]`](../reference/responses.md#tagged) | 200, or 304 on a GET that has it | `Body`, `ETag` ([conditional requests](./conditional-requests.md)) |
 | [`SeeOther`](../reference/responses.md#seeother) | 303 | `Location` |
 | [`Redirect`](../reference/responses.md#redirect) | 301, 302, 307 or 308 | `Status`, `Location` |
 
@@ -110,6 +111,8 @@ Content-Type: application/json
 
 {"id":42,"title":"Plan"}
 ```
+
+This compares one string by hand and answers a 304 the handler decides. When the answer is a record with a version, return a [`Tagged`](../reference/responses.md#tagged) instead: the framework compares the whole `If-None-Match` list (weak tags, `*`), answers the 304 before encoding the body, and states the `ETag` and the 304 in the API document ([conditional requests](./conditional-requests.md)).
 
 A header whose name is chosen at run time cannot appear in the API description; a route that sends one declares it as a registration option ([ADR 0013](../adr/0013-other-statuses-are-wrapper-types.md)).
 

@@ -88,6 +88,18 @@ _Avoid_: error handler, error middleware, recoverer
 A generic output type such as `Created[T]` that gives a success response a status other than 200.
 _Avoid_: response object, result type
 
+**Validator**:
+The version of what an answer holds, sent as an `ETag` so a client can ask whether it changed: an `ETag{Version}` carried by a `Tagged[T]` answer, answered with a 304 when a GET already has it, and sent back by a write in `If-Match`. A version of a record the application owns, or `ETagOfBody()` when it has none.
+_Avoid_: etag middleware, cache key, checksum
+
+**Tagged**:
+An answer type, `Tagged[T]`, a 200 with a JSON body and the `ETag` of that body, which is required; on a GET or HEAD whose `If-None-Match` names it, the answer is a 304 with no body.
+_Avoid_: versioned response, ETagged, cached response
+
+**IfMatch**:
+An Input field, `IfMatch`, in a write's Header section that carries the version the client read; the handler checks it against the current version with `Check`, a 412 when it is stale and a 428 when the request sent none.
+_Avoid_: precondition field, optimistic lock, version header
+
 **Stream**:
 A response whose body is written over time by a function the handler returns, after its status and headers are fixed. The function runs after the handler and every middleware have returned, and receives a StreamWriter that works only while it runs.
 _Avoid_: chunked response, writer

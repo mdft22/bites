@@ -404,6 +404,7 @@ type routeDoc struct {
 	tags    []string
 	limited bool // a RateLimiter's middleware is on the route: it can answer 429 (ADR 0069)
 	csrf    bool // CSRF is on the route: it can answer 403 to a state-changing method
+	shed    bool // a ConcurrencyLimiter's middleware is on the route: it can answer 503 with Retry-After (ADR 0091)
 }
 
 // OperationID sets the operationId of the route's operation in the API document, which a client
@@ -1035,6 +1036,7 @@ func (a *App) describeRoute(method, full, where string, inT reflect.Type, in *in
 			return nil, err
 		}
 	}
+	statedValidators(responses, method, in, out)
 	// A Submitted form's mistakes are the handler's Page (ADR 0078), so only the other sections,
 	// or a body that is not a form, answer the 400.
 	formOnly := in.body != nil && in.body.sub
@@ -1087,6 +1089,7 @@ func (a *App) describeRoute(method, full, where string, inT reflect.Type, in *in
 	op["responses"] = responses
 	rd := &routeDoc{method: method, path: template, op: op, tags: cfg.tags}
 	rd.limited, rd.csrf = middlewareAnswers(cfg.mw)
+	rd.shed = hasConcurrencyLimiter(cfg.mw)
 	return rd, nil
 }
 
@@ -1132,6 +1135,9 @@ func (a *App) parameters(reg *openapi.Registry, s *textSection, in string) ([]an
 				return nil, err
 			}
 			schema = ms
+		} else if f.ifMatch {
+			// The whole header is one string of entity-tags (ADR 0089).
+			schema = map[string]any{"type": "string"}
 		} else if f.list >= 0 || f.csv {
 			// A CSV is an array in the document whatever its wire form: the style says how it is sent.
 			items, err := a.textSchema(reg, f.typ.Elem())
@@ -1168,6 +1174,9 @@ func (a *App) parameters(reg *openapi.Registry, s *textSection, in string) ([]an
 			} else {
 				p["style"] = "simple"
 			}
+		}
+		if f.ifMatch {
+			p["description"] = "The ETag of the version the change is made to: * or entity-tags separated by commas. The change is refused with a 428 when it is missing and a 412 when the record is no longer that version."
 		}
 		if d, ok := descs[lastName(f.goPath)]; ok {
 			p["description"] = d
@@ -1513,6 +1522,8 @@ func (a *App) answersOf(reg *openapi.Registry, t reflect.Type, p *outPlan) ([]an
 		return []answer{{status: 200, media: openapi.MediaJSON, schema: s}}, nil
 	case wrapOK:
 		return wrapped(200)
+	case wrapTagged:
+		return wrapped(200, "ETag")
 	case wrapCreated:
 		if p.mustLoc {
 			return wrapped(201, "Location")
@@ -1597,11 +1608,15 @@ func (a *App) marshalDocument() ([]byte, error) {
 	// App middleware runs for every request, so a RateLimiter or CSRF given to App.Use, which may
 	// come after the routes, is read here rather than at each route's Registration.
 	appLimited, appCSRF := middlewareAnswers(a.mw)
+	appShed := hasConcurrencyLimiter(a.mw)
 	used := map[string]bool{}
 	for _, d := range a.docs {
 		rs := d.op["responses"].(map[string]any)
 		if d.limited || appLimited {
 			rs["429"] = map[string]any{"$ref": "#/components/responses/TooManyRequests"}
+		}
+		if d.shed || appShed {
+			rs["503"] = map[string]any{"$ref": "#/components/responses/ServiceUnavailable"}
 		}
 		if (d.csrf || appCSRF) && !safeMethod(d.method) {
 			if _, ok := rs["403"]; !ok {
@@ -1659,7 +1674,7 @@ func (a *App) marshalDocument() ([]byte, error) {
 		return nil, err
 	}
 	responses := errorResponses()
-	for _, name := range []string{"Unauthorized", "TooManyRequests"} {
+	for _, name := range []string{"Unauthorized", "TooManyRequests", "ServiceUnavailable"} {
 		if !used[name] {
 			delete(responses, name)
 		}
@@ -1736,6 +1751,11 @@ func errorResponses() map[string]any {
 		"Unauthorized": map[string]any{
 			"description": "The request has no credential of the route's scheme, or one that is not valid.",
 			"headers":     map[string]any{"WWW-Authenticate": header(str, "The challenge: the scheme and realm to authenticate with, and error=\"invalid_token\" for a Bearer token that is not valid.")},
+			"content":     content(problem),
+		},
+		"ServiceUnavailable": map[string]any{
+			"description": "A concurrency limit of the route is reached and the request was not taken: its backlog is full, it waited too long for a slot, or the server is shutting down.",
+			"headers":     map[string]any{"Retry-After": header(map[string]any{"type": "integer"}, "Seconds to wait before the request is sent again.")},
 			"content":     content(problem),
 		},
 		"TooManyRequests": map[string]any{

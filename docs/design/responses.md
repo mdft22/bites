@@ -12,6 +12,7 @@ A handler that returns a plain value `T` answers 200 with it as JSON. Everything
 return T                         200, JSON
 return Created[T], Accepted[T]   the wrapper's status; Header and Cookies on every wrapper
        NoContent, NotModified, SeeOther, Redirect
+return Tagged[T]                200 with an ETag; a GET that has it gets a 304
 return Text / Bytes / File       a body that is not JSON
 return Stream / SSE / Events[T]  status and headers now, a function that writes later
 return OneOf2[A, B] .. OneOf4    the variant chosen, compiled as if returned alone
@@ -40,6 +41,8 @@ A stream is the one answer that is not a value: its function runs on the connect
 8. **A cookie is written through the `Cookies` field of a wrapper, and defaults to `HttpOnly`, `Secure`, `SameSite=Lax` and `Path=/`.** Loosening any of them is written out; browsers treat `localhost` as a secure context, so `Secure` does not get in the way of development. [ADR 0043](../adr/0043-cookies-and-bodies-other-than-json.md)
 9. **Response compression is the engine's, off by default, and chooses among the app's encoders.** `WithCompression(Compression{MinSize, Encoders})` compresses a finished body of at least `MinSize` (1 KiB at least) with the registered coding the request's `Accept-Encoding` weighs highest, the app's first on a tie; gzip at `BestSpeed` is the core's (`GzipEncoder`, and `WithGzip` is gzip alone), zstd and brotli are the modules `modules/zstd` and `modules/brotli` at about gzip's CPU. Encoders' states and the output buffer are pooled and never reach user code, and a panic in one sends the answer plain. Already compressed types, a stream, SSE and a file are skipped, `Vary: Accept-Encoding` goes on every answer, and a middleware sees the uncompressed `Size()`. [ADR 0031](../adr/0031-gzip-only-and-off-by-default.md), [ADR 0061](../adr/0061-compression-chooses-among-the-apps-encoders-by-the-clients-weights-then-the-apps-order.md)
 
+10. **A JSON answer carries a validator with `Tagged[T]`, and a write checks the version it read with `IfMatch`.** `Tagged` sends an `ETag{Version, Weak}` (strong by default, built on the stack) and answers a GET or HEAD whose `If-None-Match` names it with a 304 and no body, before the body is encoded when the handler gave the version; `ETagOfBody()` makes a weak SHA-256 tag from the encoded body instead. An `IfMatch` field in a write's Header section carries the client's version, and the handler's `Check(version)` is a 428 problem when the request sent none, a 412 when it names only other versions, and ignores `W/` because gzip and proxies weaken a strong tag; a value that cannot be read is a 400 and never ignored, bounded to 1024 bytes and 16 tags, and a handler that declares the field and never asks is logged. The check is the handler's because only the handler can make it atomic with its write. All of it costs the 2 allocations of a typed route. [ADR 0089](../adr/0089-an-answer-carries-a-validator-and-a-write-checks-the-version-it-read.md)
+
 ## Decisions
 
 | ADR | What it decides |
@@ -50,11 +53,13 @@ A stream is the one answer that is not a value: its function runs on the connect
 | [0061](../adr/0061-compression-chooses-among-the-apps-encoders-by-the-clients-weights-then-the-apps-order.md) | the `Encoder` seam, the client's weights then the app's order, zstd and brotli as modules at fixed levels |
 | [0043](../adr/0043-cookies-and-bodies-other-than-json.md) | cookie defaults, `Text`, `Bytes` and `File` as output types, and `Attachment` for a download |
 | [0064](../adr/0064-a-file-answers-its-own-conditional-and-range-requests.md) | a `File`'s `ETag` from time and size, 304 and 412, one `Range` answered and a list ignored, and `Open` and `Content` as sources beside `Root` and `FS` |
+| [0089](../adr/0089-an-answer-carries-a-validator-and-a-write-checks-the-version-it-read.md) | `Tagged[T]` and `ETag` for a JSON answer's validator and its 304, `ETagOfBody` for a tag made from the body, and `IfMatch` with `Check` for a write that refuses a stale version with a 412 or a missing one with a 428 |
 | [0065](../adr/0065-static-files-are-a-route-with-twins-cache-rules-and-a-fallback-that-never-hides-a-404.md) | `Static`: precompressed twins, `Cache-Control` by name, an `embed.FS` hashed once, a fallback that never hides an API 404 |
 | [0078](../adr/0078-a-page-for-a-browser-is-a-page-and-a-form-it-shows-again-is-a-submitted-body.md) | a `Page` is HTML for a browser with 200 or a 4xx, and a `Submitted[T]` form hands its mistakes to the handler that shows it again |
 
 ## Open questions
 
+- **A write that creates only if absent** (`If-None-Match: *` on a PUT) is not built: the header is not in the Input, so a handler answers it with its own check or a unique key; and a `Tagged` answers `If-None-Match` only, with no `If-Modified-Since` ([ADR 0089](../adr/0089-an-answer-carries-a-validator-and-a-write-checks-the-version-it-read.md)).
 - **A OneOf returned with no variant chosen** is a 500 at request time, which neither the compiler nor Registration can see; past four answers a handler falls back to an interface, which can still return an undeclared type, and `Returns` can drift from the real returns ([ADR 0013](../adr/0013-other-statuses-are-wrapper-types.md)).
 - **A header whose name is decided at run time** cannot appear in the API description ([ADR 0013](../adr/0013-other-statuses-are-wrapper-types.md)).
 - **Streams are opaque to middleware.** A middleware sees a stream's start, not its size or end (an [Observer](observability.md) sees both), and compression and ETag cannot apply; a slow first byte holds the connection unless the function calls `Flush`; the 64 KiB chunk may be wrong for a real-time client; throughput and the `TCP_NOTSENT_LOWAT` calls over TLS are not measured ([ADR 0030](../adr/0030-streaming-is-a-return-type.md), [roadmap](../roadmap.md#nice-to-have-what-few-applications-need)).

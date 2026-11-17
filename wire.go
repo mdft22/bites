@@ -108,7 +108,7 @@ func (r *wireRoute) responses(tw *tabwriter.Writer, opts jsoncodec.Options) erro
 		switch p.wk {
 		case wrapNone:
 			bt = t
-		case wrapOK, wrapCreated, wrapAccepted:
+		case wrapOK, wrapCreated, wrapAccepted, wrapTagged:
 			f, _ := t.FieldByName("Body")
 			bt, status = f.Type, wrapStatus[p.wk]
 		case wrapEvents:

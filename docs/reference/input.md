@@ -667,6 +667,65 @@ type StylePatch struct {
 }
 ```
 
+### `IfMatch`
+
+```go
+type IfMatch struct {
+	// Has unexported fields.
+}
+```
+
+IfMatch is the `If-Match` header of a write: the version of the record the client read and means to change ([ADR 0089](../adr/0089-an-answer-carries-a-validator-and-a-write-checks-the-version-it-read.md)). It is a field of an Input's Header section, named `IfMatch`, and the handler checks it against the record's current version with [`Check`](#ifmatchcheck) before it writes; the zero value is a request that sent none, which [`Present`](#ifmatchpresent) reports. Registration refuses an `IfMatch` outside the Header section, one with another wire name, an `Opt[IfMatch]` and a list of `IfMatch`. A header that is not `*` or a list of quoted entity-tags is a 400 located at `header.If-Match` and never ignored, since ignoring it would make the write unconditional; a value over 1024 bytes or naming more than 16 tags, and a second `If-Match` line, are 400s too. A handler that declares the field and returns without calling `Present` or `Check` is logged on every success, as a write that was not conditional. The API document states an optional `If-Match` header parameter and the 412 and 428 answers.
+
+<!-- compiles: decls -->
+
+```go
+type Room struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Version int64  `json:"version"`
+}
+
+type UpdateRoom struct {
+	Path   struct{ ID int64 }
+	Header struct{ IfMatch bites.IfMatch }
+	Body   struct{ Name string }
+}
+
+func updateRoom(ctx context.Context, in UpdateRoom) (bites.Tagged[Room], error) {
+	cur := Room{ID: in.Path.ID, Name: "lobby", Version: 7} // loaded with the row locked
+	if err := in.Header.IfMatch.Check(strconv.FormatInt(cur.Version, 10)); err != nil {
+		return bites.Tagged[Room]{}, err // a 428 with no If-Match, a 412 with a stale one
+	}
+	cur.Name, cur.Version = in.Body.Name, cur.Version+1
+	return bites.Tagged[Room]{Body: cur, ETag: bites.ETag{Version: strconv.FormatInt(cur.Version, 10)}}, nil
+}
+```
+
+### `IfMatch.Present`
+
+```go
+func (m IfMatch) Present() bool
+```
+
+Present reports whether the request sent an `If-Match`. A handler that accepts writes with no precondition asks this and skips `Check` when it is false; asking counts as looking at the header, so the write is not logged as unchecked.
+
+### `IfMatch.Check`
+
+```go
+func (m IfMatch) Check(version string) error
+```
+
+Check compares the version the client sent with `version`, the current one of the record the handler loaded, and returns nil when they are the same. It returns a 428 problem when the request sent no `If-Match`, and a 412 when the header names other versions only; `*` matches, so call `Check` after the 404, not before. The comparison ignores `W/`, because the framework's own gzip and many proxies weaken a strong tag and the client sends back what it got, which departs from RFC 9110's strong comparison on purpose ([ADR 0089](../adr/0089-an-answer-carries-a-validator-and-a-write-checks-the-version-it-read.md)). `version` is the text of `ETag.Version` for the same record; one that cannot be in a tag is an error the handler returns and the client sees as a 500. The check and the write must be one atomic step in the store (a row lock, or an `UPDATE` whose `WHERE` names the version just checked): the framework cannot make them one.
+
+### `IfMatch.UnmarshalText`
+
+```go
+func (m *IfMatch) UnmarshalText(b []byte) error
+```
+
+UnmarshalText reads an `If-Match` value: `*`, or one or more entity-tags separated by commas. It is what the framework runs on the header, so a test of a handler that builds an `IfMatch` by hand reads it the same way. The text is kept, not copied.
+
 ### `Raw.Bytes`
 
 ```go

@@ -748,6 +748,9 @@ func (rt *typedRoute[In, Out]) call(a *App, ex *engine.Exchange, ctx context.Con
 		}
 	}
 	out, err := rt.h(ctx, in)
+	if rt.in.ifMatch != nil && err == nil {
+		rt.in.warnUnchecked(a, ex, noescapeP(unsafe.Pointer(&in)))
+	}
 	if err != nil {
 		// A stream returned with the error is dropped; its Done still runs (ADR 0030).
 		if rt.out.dynamic {

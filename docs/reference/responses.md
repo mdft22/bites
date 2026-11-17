@@ -4,11 +4,11 @@
 
 **Guide:** [responses](../guide/responses.md) · **Design:** [responses](../design/responses.md)
 
-The response comes only from the return value; a handler never holds a writer ([ADR 0009](../adr/0009-the-response-comes-only-from-the-return-value.md)). A handler that returns a plain value `T` answers `200` with it as JSON. Anything else is a type the handler returns: a status wrapper (`OK`, `Created`, `Accepted`, `NoContent`, `NotModified`, `SeeOther`, `Redirect`), a body that is not JSON (`Text`, `Bytes`, `File`), or a body written over time (`Stream`, `SSE`, `Events`). Every wrapper has a `Header` and a `Cookies` field. Error statuses never come from the output type; they come from the returned error ([errors](./errors.md)).
+The response comes only from the return value; a handler never holds a writer ([ADR 0009](../adr/0009-the-response-comes-only-from-the-return-value.md)). A handler that returns a plain value `T` answers `200` with it as JSON. Anything else is a type the handler returns: a status wrapper (`OK`, `Created`, `Accepted`, `NoContent`, `NotModified`, `SeeOther`, `Redirect`), a 200 that carries the version of its body (`Tagged`), a body that is not JSON (`Text`, `Bytes`, `File`), or a body written over time (`Stream`, `SSE`, `Events`). Every wrapper has a `Header` and a `Cookies` field. Error statuses never come from the output type; they come from the returned error ([errors](./errors.md)).
 
 A handler that can answer with more than one of these types returns a [`OneOf2`](#oneof2), [`OneOf3`](#oneof3) or [`OneOf4`](#oneof4) of them, which the compiler checks and which costs what a plain return costs; a handler that needs more than four, or an interface it already has, returns that interface and lists each type in [`Returns`](#returns). A pointer to a wrapper is accepted where the type is the wrapper's; a pointer to a `Stream`, `SSE`, `Events` or `File` is refused, and so is any of these as the Body of a wrapper.
 
-Allocations: a plain typed JSON request is 2 (3 when the done channel of its context is used); a `OneOf` return is 2; an interface return with `Returns` is 3; a `Stream`, `SSE` or `Events` is 4 a stream and 0 a write or an event; a `File` answer is 14 to 16 today, a ceiling of 16; a gzip-compressed answer is 2 ([ADR 0003](../adr/0003-the-trade-budget.md)).
+Allocations: a plain typed JSON request is 2 (3 when the done channel of its context is used); a `OneOf` return is 2; a `Tagged` return, its 304 and a tag made from the body are 2; an interface return with `Returns` is 3; a `Stream`, `SSE` or `Events` is 4 a stream and 0 a write or an event; a `File` answer is 14 to 16 today, a ceiling of 16; a gzip-compressed answer is 2 ([ADR 0003](../adr/0003-the-trade-budget.md)).
 
 What Registration refuses in an Output:
 
@@ -22,7 +22,7 @@ What Registration refuses in an Output:
 | an interface output with no `Returns` | see [`Returns`](#returns) |
 | a `OneOf` variant that cannot be a return type, or a `OneOf` anywhere but the whole return type | see [`OneOf2`](#oneof2) |
 
-Guide: [responses](../guide/responses.md). Decisions: [ADR 0013](../adr/0013-other-statuses-are-wrapper-types.md), [ADR 0043](../adr/0043-cookies-and-bodies-other-than-json.md), [ADR 0030](../adr/0030-streaming-is-a-return-type.md).
+Guide: [responses](../guide/responses.md), [conditional requests](../guide/conditional-requests.md). Decisions: [ADR 0013](../adr/0013-other-statuses-are-wrapper-types.md), [ADR 0089](../adr/0089-an-answer-carries-a-validator-and-a-write-checks-the-version-it-read.md), [ADR 0043](../adr/0043-cookies-and-bodies-other-than-json.md), [ADR 0030](../adr/0030-streaming-is-a-return-type.md).
 
 <!-- compiles: decls -->
 
@@ -107,6 +107,54 @@ type NotModified struct {
 ```
 
 NotModified is a 304 with no body. Put the validators (`ETag`) the client should keep in `Header`.
+
+### `Tagged`
+
+```go
+type Tagged[T any] struct {
+	Body    T
+	ETag    ETag
+	Header  Header
+	Cookies []Cookie
+}
+```
+
+Tagged is a 200 with a JSON body and the validator of what the body holds, in the `ETag` header ([ADR 0089](../adr/0089-an-answer-carries-a-validator-and-a-write-checks-the-version-it-read.md)). On a GET or HEAD whose `If-None-Match` names the tag (weak comparison, a list, or `*`), the answer is a 304 with the `ETag`, the `Cache-Control`, `Content-Location`, `Expires` and `Vary` of `Header`, the cookies and no body, and when the handler gave the version the body is not even encoded. On any other method the tag is only sent, so a PUT can answer with the new version of the record it changed. `ETag` is required and has one place: an empty one, a `Version` that cannot be in a tag, and an `ETag` in `Header` as well are each a logged 500 that says what to change. The API document states `ETag` as a required header of the 200, and a 304 on a GET or HEAD route. A `Tagged` is a plain 2-allocation answer, and may be a variant of a `OneOf` or a type given to `Returns`. What Registration refuses is the refusals of a JSON body, and `Tagged` as the Body of another wrapper.
+
+<!-- compiles: decls -->
+
+```go
+type Room struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Version int64  `json:"version"`
+}
+
+func getRoom(ctx context.Context, in struct{ Path struct{ ID int64 } }) (bites.Tagged[Room], error) {
+	r := Room{ID: in.Path.ID, Name: "lobby", Version: 7}
+	return bites.Tagged[Room]{Body: r, ETag: bites.ETag{Version: strconv.FormatInt(r.Version, 10)}}, nil
+}
+```
+
+### `ETag`
+
+```go
+type ETag struct {
+	Version string
+	Weak    bool
+	// Has unexported fields.
+}
+```
+
+ETag is the validator of one version of what an answer holds (RFC 9110 section 8.8.3): the opaque `Version` a client sends back in `If-None-Match` to ask "has it changed?" and in `If-Match` to say "change it only if it is still this". It is the `ETag` of a [`Tagged`](#tagged), and `Version` is the text an [`IfMatch.Check`](input.md#ifmatchcheck) compares. `Version` is a record's version counter, its update time, or a digest of what the answer shows: 1 to 128 visible characters without a double quote; the framework puts the quotes on. An empty or invalid `Version` is a logged 500, unless the tag is [`ETagOfBody`](#etagofbody). `Weak` is `W/"v"`: two answers that mean the same and are not necessarily the same bytes. The zero value is strong, which is the one a write can be made conditional on; the framework's gzip weakens a strong tag it compresses whatever this says ([ADR 0031](../adr/0031-gzip-only-and-off-by-default.md)).
+
+### `ETagOfBody`
+
+```go
+func ETagOfBody() ETag
+```
+
+ETagOfBody asks the framework to make the tag from the JSON it writes: a weak tag of a SHA-256 of the body, cut to 128 bits and written in 22 characters of base64url, the same on every instance and across restarts. It costs one pass over the encoded body (about 0.4 ns a byte) and no allocation, and a 304 saves the write and not the encode. It is for a client that revalidates a read when the handler has no version of its own; it is not the version of a write, because the handler does not know it: give `ETag{Version: v}` when a client will send the tag back in `If-Match`. A body that changes on every encode (a server time, an unordered list) gives a new tag every time.
 
 ### `SeeOther`
 

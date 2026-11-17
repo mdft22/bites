@@ -26,6 +26,7 @@ const (
 	wrapRedirect
 	wrapText
 	wrapBytes
+	wrapTagged // Tagged: a 200 JSON body with an ETag, a 304 when the client has it (ADR 0089)
 	wrapPage   // Page: HTML for a browser, with its own status (ADR 0078)
 	wrapFile   // File: a body of a known length from a file (ADR 0043)
 	wrapStream // Stream, SSE and Events, last: wk >= wrapStream is "a stream" (ADR 0030)
@@ -33,7 +34,7 @@ const (
 	wrapEvents
 )
 
-var wrapStatus = [...]int{wrapOK: 200, wrapCreated: 201, wrapAccepted: 202, wrapNoContent: 204, wrapNotModified: 304, wrapSeeOther: 303, wrapText: 200, wrapBytes: 200, wrapPage: 200}
+var wrapStatus = [...]int{wrapOK: 200, wrapCreated: 201, wrapAccepted: 202, wrapNoContent: 204, wrapNotModified: 304, wrapSeeOther: 303, wrapText: 200, wrapBytes: 200, wrapTagged: 200, wrapPage: 200}
 
 // outPlan is how an Output type becomes a response (ADR 0009, ADR 0013). A wrapper's status,
 // headers and cookies are read at fixed offsets and its body is encoded by a plan compiled for
@@ -56,6 +57,7 @@ type outPlan struct {
 	cookOff    uintptr
 	locOff     uintptr
 	statOff    uintptr
+	etagOff    uintptr // Tagged: where the ETag is
 	ctOff      uintptr // Bytes: where the content type is
 	hasLoc     bool
 	mustLoc    bool    // SetsLocation: an empty Location is a logged 500, and the document requires the header
@@ -79,7 +81,7 @@ var wrapperNames = []struct {
 }{
 	{"OK[", wrapOK}, {"Created[", wrapCreated}, {"Accepted[", wrapAccepted},
 	{"NoContent", wrapNoContent}, {"NotModified", wrapNotModified},
-	{"SeeOther", wrapSeeOther}, {"Redirect", wrapRedirect}, {"Text", wrapText}, {"Bytes", wrapBytes}, {"Page", wrapPage},
+	{"SeeOther", wrapSeeOther}, {"Redirect", wrapRedirect}, {"Text", wrapText}, {"Bytes", wrapBytes}, {"Tagged[", wrapTagged}, {"Page", wrapPage},
 	{"File", wrapFile}, {"Stream", wrapStream}, {"SSE", wrapSSE}, {"Events[", wrapEvents},
 }
 
@@ -146,6 +148,9 @@ func (a *App) compileOutput(t reflect.Type) (*outPlan, error) {
 			}
 			if f, ok := t.FieldByName("Status"); ok {
 				p.statOff = f.Offset
+			}
+			if f, ok := t.FieldByName("ETag"); ok {
+				p.etagOff = f.Offset
 			}
 			if w.kind == wrapFile {
 				for name, off := range map[string]*uintptr{"Root": &p.rootOff, "FS": &p.fsOff, "Open": &p.openOff, "Size": &p.sizeOff, "ModTime": &p.modOff, "Content": &p.contentOff, "Name": &p.nameOff, "ContentType": &p.ctOff} {
@@ -312,6 +317,10 @@ func (p *outPlan) write(a *App, ex *engine.Exchange, src unsafe.Pointer, ctx con
 	}
 	if p.wk == wrapFile {
 		p.writeFile(a, ex, src, ctx)
+		return
+	}
+	if p.wk == wrapTagged {
+		p.writeTagged(a, ex, src)
 		return
 	}
 	if p.wk >= wrapStream {

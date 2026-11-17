@@ -53,6 +53,7 @@ type textField struct {
 	items    *wire.Items   // a list: its type's Items bound (ADR 0021), nil when it has none
 	typ      reflect.Type  // the type the text holds, for the API description: the element's for an Opt, the slice for a list
 	file     *fileSpec     // Multipart: the field holds files, not text; dec is nil
+	ifMatch  bool          // an IfMatch: the If-Match header, which may be absent (ADR 0089)
 	hasDef   bool          // the section's Defaults names this field (ADR 0041)
 	def      string        // the default as a client would send it, decoded again on each request that omits the field
 	defVal   reflect.Value // the default decoded once at Registration, for the API description only
@@ -120,8 +121,15 @@ type bodyPlan struct {
 type inputPlan struct {
 	path, query, header, cookie *textSection
 	body                        *bodyPlan
-	provs                       []provStep // the Providers the route runs, in order; nil when none
-	validates                   bool       // the Input has a Validate() error (ADR 0021)
+	provs                       []provStep     // the Providers the route runs, in order; nil when none
+	validates                   bool           // the Input has a Validate() error (ADR 0021)
+	ifMatch                     []ifMatchField // the IfMatch fields of the Header section (ADR 0089); nil when none
+}
+
+// ifMatchField is where an IfMatch sits in the Input, and its name for a message.
+type ifMatchField struct {
+	off    uintptr
+	goPath string
 }
 
 type compiler struct {
@@ -227,6 +235,11 @@ func (c *compiler) compileInput(t reflect.Type) (*inputPlan, error) {
 				p.query = s
 			case secHeader:
 				p.header = s
+				for _, tf := range s.fields {
+					if tf.ifMatch {
+						p.ifMatch = append(p.ifMatch, ifMatchField{off: s.off + tf.off, goPath: tf.goPath})
+					}
+				}
 			default:
 				p.cookie = s
 			}
@@ -684,12 +697,18 @@ func (c *compiler) textField(kind secKind, fpath string, t reflect.Type, off uin
 		}
 		return tf, refusalf("%s is a FormFile in a %s; a file is a part of a multipart body, so make the Body a Multipart", fpath, where)
 	}
+	if t == ifMatchType {
+		return c.ifMatchField(kind, tf, name)
+	}
 	pk, elem, vOff, fOff := wire.PresenceOf(t)
 	inner := t
 	switch pk {
 	case wire.Nullable:
 		return tf, refusalf("%s is a Null; text has no null, so the type would promise a state no request can produce: use Opt[T] for a value that may be missing", fpath)
 	case wire.Optional:
+		if elem == ifMatchType {
+			return tf, refusalf("%s is an Opt of IfMatch, but an IfMatch is already absent when the request sent no If-Match: make the field an IfMatch and ask Present() in the handler", fpath)
+		}
 		if k, _, _, _ := wire.PresenceOf(elem); k != wire.None {
 			return tf, refusalf("%s: an Opt of %s is not allowed in a text section; text has no null", fpath, typeLabel(elem))
 		}
@@ -710,6 +729,9 @@ func (c *compiler) textField(kind secKind, fpath string, t reflect.Type, off uin
 			return tf, refusalf("%s is a list, but a path parameter holds one value", fpath)
 		}
 		et := inner.Elem()
+		if et == ifMatchType {
+			return tf, refusalf("%s is a list of IfMatch, but If-Match is one header whose value is already a list of entity-tags: make the field an IfMatch", fpath)
+		}
 		if k, _, _, _ := wire.PresenceOf(et); k != wire.None {
 			return tf, refusalf("%s: a list element cannot be %s, absence means nothing there", fpath, typeLabel(et))
 		}

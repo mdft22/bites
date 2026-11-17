@@ -19,18 +19,19 @@ For the pieces together in one program, [`examples/chat`](../../examples/chat/RE
 7. [Errors](./errors.md): problem+json for every error, status errors, unknown errors, panics and the request ID.
 8. [Responses](./responses.md): status wrappers, headers, cookies, text and bytes, and handlers that return an interface.
 9. [Files](./files.md): sending a file from an `os.Root` or an `fs.FS`, and what it answers for a missing one.
-10. [Streaming and SSE](./streaming.md): responses written over time, and Server-Sent Events.
-11. [Middleware](./middleware.md): writing a middleware, where it runs and what it can see.
-12. [CORS, request IDs, access logs and timeouts](./first-party-middleware.md): the three middleware the framework ships, and its access log.
-13. [Providers](./providers.md): filling Input fields from the request, such as the signed-in user, and replacing them in a test.
-14. [Security](./security.md): security headers, authenticating with Bearer tokens, Basic auth and API keys, rate limiting, sessions and CSRF.
-15. [WebSockets](./websockets.md): typed WebSocket routes, sending, topics and closing.
-16. [The OpenAPI document](./openapi.md): serving the API description the types already carry, and enriching it.
-17. [Limits and timeouts](./limits.md): the limits that are on by default, and how to change them for the app, a group or a route.
-18. [Deploying](./deploying.md): listening, TLS, graceful shutdown, health and readiness, gzip and running behind a proxy.
-19. [Observability](./observability.md): Observers, the access log, Prometheus metrics and following a request across services.
-20. [Testing](./testing.md): testing an app over memory with `bitetest`, with a clock you move yourself and a WebSocket client.
-21. [Mounting an http.Handler](./mounting-net-http.md): serving pprof, a file server or any `net/http` handler on a route, as a slow path.
-22. [The API documentation UI](./api-docs-ui.md): Swagger UI or Scalar for your OpenAPI document, from the `docsui` module.
-23. [Writing descriptions as doc comments](./doc-comments.md): generating the `Descriptions` methods from the comments of your fields.
-24. [Building the documentation site](./documentation-site.md): rendering these pages to static HTML.
+10. [Conditional requests](./conditional-requests.md): a version on an answer so a client that has it gets a 304, and a write that checks the version it read so two editors cannot overwrite each other.
+11. [Streaming and SSE](./streaming.md): responses written over time, and Server-Sent Events.
+12. [Middleware](./middleware.md): writing a middleware, where it runs and what it can see.
+13. [CORS, request IDs, access logs and timeouts](./first-party-middleware.md): the three middleware the framework ships, and its access log.
+14. [Providers](./providers.md): filling Input fields from the request, such as the signed-in user, and replacing them in a test.
+15. [Security](./security.md): security headers, authenticating with Bearer tokens, Basic auth and API keys, rate limiting, sessions and CSRF.
+16. [WebSockets](./websockets.md): typed WebSocket routes, sending, topics and closing.
+17. [The OpenAPI document](./openapi.md): serving the API description the types already carry, and enriching it.
+18. [Limits and timeouts](./limits.md): the limits that are on by default, and how to change them for the app, a group or a route.
+19. [Deploying](./deploying.md): listening, TLS, graceful shutdown, health and readiness, gzip and running behind a proxy.
+20. [Observability](./observability.md): Observers, the access log, Prometheus metrics and following a request across services.
+21. [Testing](./testing.md): testing an app over memory with `bitetest`, with a clock you move yourself and a WebSocket client.
+22. [Mounting an http.Handler](./mounting-net-http.md): serving pprof, a file server or any `net/http` handler on a route, as a slow path.
+23. [The API documentation UI](./api-docs-ui.md): Swagger UI or Scalar for your OpenAPI document, from the `docsui` module.
+24. [Writing descriptions as doc comments](./doc-comments.md): generating the `Descriptions` methods from the comments of your fields.
+25. [Building the documentation site](./documentation-site.md): rendering these pages to static HTML.

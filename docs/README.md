@@ -63,6 +63,7 @@ In the order the guide teaches them. Each row is one guide page and the referenc
 |---|---|---|
 | [Responses](./guide/responses.md) | [Responses](./reference/responses.md), [`zstd`](./reference/zstd.md), [`brotli`](./reference/brotli.md) | [Responses](./design/responses.md) |
 | [Files](./guide/files.md) | [`File`, `Static`](./reference/responses.md) | [Responses](./design/responses.md) |
+| [Conditional requests](./guide/conditional-requests.md) | [`Tagged`, `ETag`](./reference/responses.md#tagged), [`IfMatch`](./reference/input.md#ifmatch) | [Responses](./design/responses.md) |
 | [Streaming and SSE](./guide/streaming.md) | [`Stream`, `SSE`, `Events`](./reference/responses.md) | [Responses](./design/responses.md) |
 
 ### Around the handler
